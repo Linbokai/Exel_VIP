@@ -2,7 +2,11 @@ __pycache__/
 *.pyc
 node_modules/
 output/
+cache/
 *.png
 *.xlsx
 ~$*
 .env
+.pytest_cache/
+test_output.txt
+test_results.txt

@@ -84,7 +84,7 @@ STATUS_PENDING = 5   # 受理中
 STATUS_SOLVED = 10   # 已解决
 STATUS_CLOSED = 15   # 已关闭
 
-# ======================== 问题类型关键词 ========================
+# ======================== 问题类型关键词（扩充版） ========================
 # 自定义字段名（从API实际返回值确认）
 CF_ISSUE_TYPE = "问题类型"       # 自定义字段：问题类型（充值问题/登录问题/...）
 CF_RECHARGE = "角色累充"         # 自定义字段：角色累充金额
@@ -96,8 +96,50 @@ ISSUE_KEYWORDS = {
     "玩法咨询": ["玩法", "攻略", "怎么玩", "规则", "活动", "副本", "任务", "装备"],
     "投诉问题": ["投诉", "举报", "12345", "消协", "退款", "工商", "维权"],
     "bug问题":  ["bug", "BUG", "故障", "异常", "卡顿", "报错", "卡死", "崩溃"],
+    "误操作问题": ["误操作", "误点", "误触", "误购", "误兑换", "误升级", "回退"],
+    "举报违规": ["外挂", "开挂", "辱骂", "刷屏", "违规昵称", "言论违规", "威胁"],
+    "游戏建议": ["建议", "希望", "优化", "改进", "体验差", "不合理"],
 }
+
+# ======================== 并发与速率控制 ========================
+API_MAX_WORKERS = 8           # 并发请求线程数
+API_RATE_LIMIT = 10           # 每秒最大请求数
+API_RATE_BURST = 15           # 突发最大请求数
+
+# ======================== 缓存 ========================
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")
+CACHE_DB_PATH = os.path.join(CACHE_DIR, "tickets.db")
+CACHE_TTL_SECONDS = 3600      # 缓存有效期（秒）
+
+# ======================== LLM 智能分类/摘要 ========================
+LLM_ENABLED = os.getenv("LLM_ENABLED", "false").lower() == "true"
+LLM_API_URL = os.getenv("LLM_API_URL", "https://api.openai.com/v1/chat/completions")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LLM_TIMEOUT = 15  # 秒
+
+# ======================== 告警 ========================
+ALERT_ENABLED = os.getenv("ALERT_ENABLED", "false").lower() == "true"
+# 企微机器人 webhook
+ALERT_WECOM_WEBHOOK = os.getenv("ALERT_WECOM_WEBHOOK", "")
+# 钉钉机器人 webhook
+ALERT_DINGTALK_WEBHOOK = os.getenv("ALERT_DINGTALK_WEBHOOK", "")
+# 告警阈值
+ALERT_SUPER_R_THRESHOLD = 5     # 超R工单数 >= N 触发告警
+ALERT_COMPLAINT_THRESHOLD = 3   # 预投诉数 >= N 触发告警
+ALERT_PENDING_THRESHOLD = 10    # 待跟进工单数 >= N 触发告警
+
+# ======================== 定时调度 ========================
+SCHEDULER_ENABLED = os.getenv("SCHEDULER_ENABLED", "false").lower() == "true"
+SCHEDULER_CRON_HOUR = int(os.getenv("SCHEDULER_CRON_HOUR", "18"))
+SCHEDULER_CRON_MINUTE = int(os.getenv("SCHEDULER_CRON_MINUTE", "30"))
+
+# ======================== Web 认证 ========================
+WEB_AUTH_ENABLED = os.getenv("WEB_AUTH_ENABLED", "false").lower() == "true"
+WEB_AUTH_USERNAME = os.getenv("WEB_AUTH_USERNAME", "admin")
+WEB_AUTH_PASSWORD = os.getenv("WEB_AUTH_PASSWORD", "vip2026")
 
 # ======================== 输出 ========================
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
