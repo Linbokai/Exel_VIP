@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VIP客服日报</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            min-height: 100vh;
+        }
+
+        /* 顶栏 */
+        .header {
+            background: linear-gradient(135deg, #2F5496, #1a3a6e);
+            color: #fff;
+            padding: 20px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 8px rgba(0,0,0,.15);
+        }
+        .header h1 { font-size: 22px; font-weight: 600; }
+        .header .subtitle { font-size: 13px; opacity: .75; margin-top: 4px; }
+
+        /* 主体 */
+        .container {
+            max-width: 1000px;
+            margin: 24px auto;
+            padding: 0 16px;
+        }
+
+        /* 操作卡片 */
+        .card {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 1px 4px rgba(0,0,0,.08);
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #2F5496;
+        }
+
+        /* 操作栏 */
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        .controls label {
+            font-size: 14px;
+            color: #666;
+        }
+        .controls input[type="date"] {
+            padding: 8px 12px;
+            border: 1px solid #d9d9d9;
+            border-radius: 6px;
+            font-size: 14px;
+            outline: none;
+            transition: border-color .2s;
+        }
+        .controls input[type="date"]:focus { border-color: #2F5496; }
+
+        .btn {
+            padding: 9px 28px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all .2s;
+            font-weight: 500;
+        }
+        .btn-primary {
+            background: #2F5496;
+            color: #fff;
+        }
+        .btn-primary:hover { background: #1a3a6e; }
+        .btn-primary:disabled {
+            background: #a0b4d0;
+            cursor: not-allowed;
+        }
+        .btn-success {
+            background: #52c41a;
+            color: #fff;
+        }
+        .btn-success:hover { background: #3fad09; }
+        .btn-outline {
+            background: #fff;
+            color: #2F5496;
+            border: 1px solid #2F5496;
+        }
+        .btn-outline:hover { background: #f0f4fa; }
+
+        /* 统计卡片 */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .stat-item {
+            background: #fff;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 1px 4px rgba(0,0,0,.08);
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: #2F5496;
+        }
+        .stat-label {
+            font-size: 13px;
+            color: #999;
+            margin-top: 4px;
+        }
+
+        /* 日报预览 */
+        .report-preview {
+            background: #fafafa;
+            border: 1px solid #e8e8e8;
+            border-radius: 6px;
+            padding: 20px;
+            font-family: "Courier New", "Consolas", monospace;
+            font-size: 13px;
+            line-height: 1.8;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        /* 下载区 */
+        .download-bar {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        /* 历史记录 */
+        .history-list {
+            list-style: none;
+        }
+        .history-list li {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 14px;
+        }
+        .history-list li:last-child { border-bottom: none; }
+        .history-date { color: #666; }
+        .history-actions a {
+            color: #2F5496;
+            text-decoration: none;
+            margin-left: 12px;
+            font-size: 13px;
+        }
+        .history-actions a:hover { text-decoration: underline; }
+
+        /* 加载动画 */
+        .loading {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            color: #2F5496;
+            font-size: 14px;
+        }
+        .loading.active { display: flex; }
+        .spinner {
+            width: 20px; height: 20px;
+            border: 3px solid #d6e4f0;
+            border-top-color: #2F5496;
+            border-radius: 50%;
+            animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* 提示 */
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 14px;
+            z-index: 1000;
+            transform: translateX(120%);
+            transition: transform .3s;
+        }
+        .toast.show { transform: translateX(0); }
+        .toast.error { background: #ff4d4f; }
+        .toast.success { background: #52c41a; }
+
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div>
+        <h1>VIP客服日报系统</h1>
+        <div class="subtitle">自动生成标准化客诉日报</div>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- 操作卡片 -->
+    <div class="card">
+        <div class="card-title">生成日报</div>
+        <div class="controls">
+            <label>选择日期：</label>
+            <input type="date" id="reportDate" value="{{ today }}">
+            <button class="btn btn-primary" id="btnGenerate" onclick="generateReport()">
+                生成日报
+            </button>
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <span>正在生成日报，需要1~3分钟，请耐心等待...</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 统计卡片 -->
+    <div class="stats hidden" id="statsSection">
+        <div class="stat-item">
+            <div class="stat-value" id="statDaily">0</div>
+            <div class="stat-label">当日工单数</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value" id="statPending">0</div>
+            <div class="stat-label">待跟进工单</div>
+        </div>
+        <div class="stat-item">
+            <div class="stat-value" id="statSessions">0</div>
+            <div class="stat-label">总会话量</div>
+        </div>
+    </div>
+
+    <!-- 日报预览 -->
+    <div class="card hidden" id="reportSection">
+        <div class="card-title">日报预览</div>
+        <div class="report-preview" id="reportContent"></div>
+        <div class="download-bar" id="downloadBar">
+            <!-- 动态生成下载按钮 -->
+        </div>
+    </div>
+
+    <!-- 历史记录 -->
+    <div class="card">
+        <div class="card-title">历史日报</div>
+        <ul class="history-list" id="historyList">
+            <li style="color:#999;">加载中...</li>
+        </ul>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+    // 加载历史记录
+    async function loadHistory() {
+        try {
+            const res = await fetch('/history');
+            const files = await res.json();
+            const list = document.getElementById('historyList');
+
+            if (files.length === 0) {
+                list.innerHTML = '<li style="color:#999;">暂无历史日报</li>';
+                return;
+            }
+
+            list.innerHTML = files.map(f => {
+                const dateStr = f.date.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3');
+                const sizeKB = (f.size / 1024).toFixed(1);
+                return `<li>
+                    <span class="history-date">${dateStr} (${sizeKB} KB)</span>
+                    <span class="history-actions">
+                        <a href="/download/${f.name}" download>下载TXT</a>
+                        <a href="/download/${f.name.replace('.txt', '.xlsx')}" download>下载Excel</a>
+                    </span>
+                </li>`;
+            }).join('');
+        } catch (e) {
+            document.getElementById('historyList').innerHTML =
+                '<li style="color:#999;">加载失败</li>';
+        }
+    }
+
+    // 生成日报
+    async function generateReport() {
+        const dateInput = document.getElementById('reportDate');
+        const btn = document.getElementById('btnGenerate');
+        const loading = document.getElementById('loading');
+        const date = dateInput.value;
+
+        if (!date) {
+            showToast('请选择日期', 'error');
+            return;
+        }
+
+        // UI状态
+        btn.disabled = true;
+        loading.classList.add('active');
+        document.getElementById('statsSection').classList.add('hidden');
+        document.getElementById('reportSection').classList.add('hidden');
+
+        try {
+            // 超时5分钟（待跟进工单量大时需要较长时间）
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 300000);
+            const res = await fetch('/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date }),
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+
+            const data = await res.json();
+
+            if (!data.success) {
+                showToast(data.error || '生成失败', 'error');
+                return;
+            }
+
+            // 显示统计
+            const stats = data.stats;
+            document.getElementById('statDaily').textContent = stats.daily_count;
+            document.getElementById('statPending').textContent = stats.pending_count;
+            document.getElementById('statSessions').textContent = stats.total_sessions;
+            document.getElementById('statsSection').classList.remove('hidden');
+
+            // 显示日报预览
+            document.getElementById('reportContent').textContent = data.report;
+            document.getElementById('reportSection').classList.remove('hidden');
+
+            // 下载按钮
+            let downloadHtml = '';
+            if (data.txt_filename) {
+                downloadHtml += `<a class="btn btn-outline" href="/download/${data.txt_filename}" download>下载 TXT</a>`;
+            }
+            if (data.xlsx_filename) {
+                downloadHtml += `<a class="btn btn-success" href="/download/${data.xlsx_filename}" download>下载 Excel</a>`;
+            }
+            document.getElementById('downloadBar').innerHTML = downloadHtml;
+
+            showToast('日报生成成功', 'success');
+            loadHistory();
+
+        } catch (e) {
+            showToast('请求失败：' + e.message, 'error');
+        } finally {
+            btn.disabled = false;
+            loading.classList.remove('active');
+        }
+    }
+
+    // Toast 提示
+    function showToast(msg, type) {
+        const toast = document.getElementById('toast');
+        toast.textContent = msg;
+        toast.className = 'toast ' + type + ' show';
+        setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    // 初始化
+    loadHistory();
+</script>
+
+</body>
+</html>
