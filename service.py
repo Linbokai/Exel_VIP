@@ -139,10 +139,13 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
         result.errors.append("待跟进工单")
 
     # 3. 获取总会话量 + 会话数据
-    # 使用与工单相同的日报时间窗口（昨日18:00~当日17:59），保持统计口径一致
+    # 会话统计使用完整自然日（00:00~23:59），与七鱼坐席工作量报表对齐
+    session_day = report_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    session_start = int(session_day.timestamp() * 1000)
+    session_end = int(session_day.replace(hour=23, minute=59, second=59).timestamp() * 1000)
     _progress("获取会话数据...")
     try:
-        result.total_sessions = client.get_total_session_count(daily_start, daily_end)
+        result.total_sessions = client.get_total_session_count(session_start, session_end)
         logger.info(f"总会话量: {result.total_sessions}")
     except Exception as e:
         logger.error(f"获取总会话量失败: {e}", exc_info=True)
@@ -150,7 +153,7 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
 
     if fetch_sessions:
         try:
-            result.session_data = client.export_session_data(daily_start, daily_end)
+            result.session_data = client.export_session_data(session_start, session_end)
             logger.info(f"会话数据: {len(result.session_data)} 条")
         except Exception as e:
             logger.warning(f"获取会话数据失败（非关键）: {e}")

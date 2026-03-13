@@ -567,17 +567,32 @@ class QiyuClient:
         return data.get("message", data)
 
     def get_total_session_count(self, start_time, end_time):
-        """获取总会话量（从工作量报表或历史总览）"""
+        """
+        获取总会话量（与七鱼坐席工作量报表对齐）。
+        优先使用历史总览（不重复计算），其次用工作量报表汇总级别。
+        """
 
         # 将endTime限制为当前时间（统计API不接受未来时间）
         now_ms = int(time.time() * 1000)
         if end_time > now_ms:
             end_time = now_ms
 
-        # 先尝试工作量报表
+        # 1. 优先使用历史数据总览（全局会话数，不存在重复计算问题）
         try:
-            workload = self.get_staff_workload(start_time, end_time)
-            logger.info(f"工作量报表返回: type={type(workload).__name__}, value={str(workload)[:200]}")
+            overview = self.get_overview(start_time, end_time)
+            logger.info(f"历史总览返回: type={type(overview).__name__}, value={str(overview)[:200]}")
+            if isinstance(overview, dict):
+                # sessions 是总会话数（与坐席报表页面顶部的"总会话量"一致）
+                count = overview.get("sessions") or overview.get("totalSessionCount")
+                if count is not None and int(count) > 0:
+                    return int(count)
+        except Exception as e:
+            logger.warning(f"获取总览失败: {e}")
+
+        # 2. 工作量报表 — 用 model=2（按客服组）避免同一会话被多个坐席重复计算
+        try:
+            workload = self.get_staff_workload(start_time, end_time, model=2)
+            logger.info(f"工作量报表(按组)返回: type={type(workload).__name__}, value={str(workload)[:200]}")
             if isinstance(workload, list):
                 total = sum(s.get("totalSessionCount", 0) for s in workload)
                 if total > 0:
@@ -589,18 +604,22 @@ class QiyuClient:
         except Exception as e:
             logger.warning(f"获取工作量报表失败: {e}")
 
-        # 再尝试历史总览
+        # 3. 兜底：按全部汇总（model=1），但可能因转接重复计算
         try:
-            overview = self.get_overview(start_time, end_time)
-            logger.info(f"历史总览返回: type={type(overview).__name__}, value={str(overview)[:200]}")
-            if isinstance(overview, dict):
-                count = overview.get("sessions") or overview.get("totalSessionCount")
-                if count is not None and int(count) > 0:
+            workload = self.get_staff_workload(start_time, end_time, model=1)
+            logger.info(f"工作量报表(全部)返回: type={type(workload).__name__}, value={str(workload)[:200]}")
+            if isinstance(workload, list):
+                total = sum(s.get("totalSessionCount", 0) for s in workload)
+                if total > 0:
+                    return total
+            elif isinstance(workload, dict):
+                count = workload.get("totalSessionCount", 0)
+                if count and int(count) > 0:
                     return int(count)
         except Exception as e:
-            logger.warning(f"获取总览失败: {e}")
+            logger.warning(f"获取工作量报表失败: {e}")
 
-        # 最后尝试实时会话概览（当日实时数据）
+        # 4. 最后尝试实时会话概览（当日实时数据）
         try:
             msg = self.get_realtime_session_stats()
             if isinstance(msg, dict):
