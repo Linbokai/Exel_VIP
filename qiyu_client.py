@@ -539,21 +539,33 @@ class QiyuClient:
             return ts_ms // 1000
         return ts_ms
 
-    def get_staff_workload(self, start_time, end_time, model=1):
+    def get_staff_workload(self, start_time, end_time, model=1, retries=3):
         """
-        客服工作量报表。
+        客服工作量报表（带 14009 频控自动重试）。
         model: 1=全部, 2=客服组, 3=客服
         注意：统计接口使用秒级时间戳。
         """
-        data = self._request(API["stat_staff_workload"], {
-            "startTime": self._to_seconds(start_time),
-            "endTime": self._to_seconds(end_time),
-            "model": model,
-        })
-        msg = data.get("message", data)
-        if isinstance(msg, dict):
-            return msg.get("result", [])
-        return msg
+        for attempt in range(retries):
+            data = self._request(API["stat_staff_workload"], {
+                "startTime": self._to_seconds(start_time),
+                "endTime": self._to_seconds(end_time),
+                "model": model,
+            })
+            code = data.get("code", -1)
+            if code == 14009:
+                wait = 10 * (attempt + 1)
+                logger.warning(f"频率限制(14009)，等待 {wait}s 后重试 [{attempt+1}/{retries}]")
+                time.sleep(wait)
+                continue
+            msg = data.get("message", data)
+            if isinstance(msg, dict):
+                return msg.get("result", [])
+            if isinstance(msg, list):
+                return msg
+            logger.warning(f"工作量报表返回非预期类型: code={code}, msg_type={type(msg).__name__}, msg={str(msg)[:200]}")
+            return []
+        logger.error(f"工作量报表重试 {retries} 次仍被频控，放弃")
+        return []
 
     def get_overview(self, start_time, end_time):
         """
@@ -566,62 +578,108 @@ class QiyuClient:
         })
         return data.get("message", data)
 
+    @staticmethod
+    def _extract_session_count(item):
+        """从工作量报表项中提取会话总量（兼容多种字段名）"""
+        for key in ("sessionCount", "totalSession", "sessions",
+                     "session_count", "total_session"):
+            val = item.get(key)
+            if val is not None:
+                return int(val or 0)
+        return 0
+
+    @staticmethod
+    def _extract_group_name(item):
+        """从工作量报表项中提取组名（兼容多种字段名）"""
+        for key in ("groupName", "name", "group", "group_name",
+                     "staffGroupName", "departName"):
+            val = item.get(key)
+            if val and str(val).strip():
+                return str(val).strip()
+        return ""
+
     def get_total_session_count(self, start_time, end_time):
         """
-        获取「倍特VIP工单组」的会话总量（与七鱼坐席工作量报表对齐）。
+        获取VIP部门所有客服组的会话总量合计（与七鱼坐席工作量报表对齐）。
 
         策略（按优先级）：
-          1. model=2（按客服组）→ 筛选目标组的 sessionCount
-          2. model=3（按坐席）→ 筛选属于目标组的坐席，求和 sessionCount
-             这与七鱼后台「坐席工作量」报表的总计行一致。
-          3. 不再兜底到全局实时会话概览，因为那是全公司数据，会偏大。
+          1. model=2（按客服组）→ 匹配所有包含 AGENT_GROUP 前缀的组 → 求和
+          2. model=3（按坐席）→ 筛选属于匹配组的坐席 → 求和 sessionCount
+          3. 实时会话概览 API → 取 sessionInCount 作为近似值
         """
         now_ms = int(time.time() * 1000)
         if end_time > now_ms:
             end_time = now_ms
 
-        # 前面的工单搜索/enrichment 会消耗大量 API 配额，
-        # 统计接口前主动等待，避免被 14009 频率限制拦截
-        time.sleep(3)
+        time.sleep(1)
 
-        # ---------- 方案1: model=2（按客服组） ----------
+        # ---------- 方案1: model=2（按客服组）→ 匹配所有VIP组并求和 ----------
         try:
             workload = self.get_staff_workload(start_time, end_time, model=2)
             logger.info(f"工作量报表(按组)返回: {len(workload) if isinstance(workload, list) else type(workload).__name__}")
             if isinstance(workload, list) and workload:
+                total = 0
+                matched_groups = []
+                all_groups_debug = []
                 for group in workload:
-                    group_name = group.get("groupName", "") or group.get("name", "")
-                    if AGENT_GROUP in group_name:
-                        count = int(group.get("sessionCount", 0) or 0)
-                        logger.info(f"匹配组「{group_name}」: sessionCount={count}")
-                        if count > 0:
-                            return count
-                all_groups = [g.get("groupName", g.get("name", "?")) for g in workload]
-                logger.warning(f"未匹配到「{AGENT_GROUP}」，可用组: {all_groups}")
+                    gn = self._extract_group_name(group)
+                    sc = self._extract_session_count(group)
+                    all_groups_debug.append(f"{gn}={sc}")
+                    if AGENT_GROUP in gn:
+                        total += sc
+                        matched_groups.append(f"{gn}={sc}")
+
+                logger.info(f"所有组: {', '.join(all_groups_debug)}")
+                if matched_groups:
+                    logger.info(f"匹配VIP组: {', '.join(matched_groups)}, 合计={total}")
+                    if total > 0:
+                        return total
+                else:
+                    logger.warning(f"未匹配到包含「{AGENT_GROUP}」的组")
+                    if workload:
+                        logger.info(f"API返回首条原始数据(诊断): {json.dumps(workload[0], ensure_ascii=False)[:500]}")
         except Exception as e:
             logger.warning(f"获取工作量报表(按组)失败: {e}")
 
         # ---------- 方案2: model=3（按坐席）→ 筛选组 → 求和 ----------
-        time.sleep(3)
+        time.sleep(5)
         try:
             agents = self.get_staff_workload(start_time, end_time, model=3)
             logger.info(f"工作量报表(按坐席)返回: {len(agents) if isinstance(agents, list) else type(agents).__name__}")
             if isinstance(agents, list) and agents:
                 total = 0
                 matched = []
+                all_groups = set()
                 for a in agents:
-                    gn = a.get("groupName", "") or a.get("group", "")
+                    gn = self._extract_group_name(a)
+                    all_groups.add(gn or "(空)")
                     if AGENT_GROUP in str(gn):
-                        sc = int(a.get("sessionCount", 0) or 0)
+                        sc = self._extract_session_count(a)
                         total += sc
-                        matched.append(f"{a.get('staffName', '?')}={sc}")
+                        matched.append(f"{a.get('staffName', '?')}[{gn}]={sc}")
                 if matched:
-                    logger.info(f"按坐席汇总「{AGENT_GROUP}」: {', '.join(matched)}, 合计={total}")
+                    logger.info(f"按坐席汇总「{AGENT_GROUP}*」: {', '.join(matched)}, 合计={total}")
                     return total
-                all_groups = sorted({a.get("groupName", a.get("group", "?")) for a in agents})
-                logger.warning(f"model=3 未匹配组「{AGENT_GROUP}」，可用组: {all_groups}")
+                logger.warning(f"model=3 未匹配包含「{AGENT_GROUP}」的组，可用组: {sorted(all_groups)}")
+                if agents:
+                    logger.info(f"API返回首条原始数据(诊断): {json.dumps(agents[0], ensure_ascii=False)[:500]}")
         except Exception as e:
             logger.warning(f"获取工作量报表(按坐席)失败: {e}")
 
-        logger.error("所有统计方案均未获取到VIP组会话量，返回0")
+        # ---------- 方案3: 实时会话概览 → sessionInCount ----------
+        logger.warning("工作量报表API无可用数据，尝试实时会话概览API作为兜底")
+        time.sleep(3)
+        try:
+            overview = self.get_realtime_session_stats()
+            if isinstance(overview, dict):
+                session_in = overview.get("sessionInCount")
+                if session_in is not None and int(session_in) > 0:
+                    count = int(session_in)
+                    logger.info(f"实时概览 sessionInCount={count} (近似值)")
+                    return count
+                logger.info(f"实时概览可用字段: { {k: v for k, v in overview.items() if 'ession' in k.lower()} }")
+        except Exception as e:
+            logger.warning(f"获取实时会话概览失败: {e}")
+
+        logger.error("所有统计方案均未获取到会话量，返回0")
         return 0
