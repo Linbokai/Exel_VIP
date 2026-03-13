@@ -14,15 +14,25 @@ git merge <当前分支> -m "merge: <当前分支> into main"
 git push origin main
 ```
 
-### Step 2 — 服务器拉取代码
+### Step 2 — 服务器拉取代码并重启服务
 
 ```bash
-echo 'cd ~/Exel_VIP && git pull origin main 2>&1 && echo PULL_OK; exit' | \
+echo 'cd ~/Exel_VIP && GIT_SSL_NO_VERIFY=true git pull origin main 2>&1 && echo PULL_OK; exit' | \
   ssh -T -i "$USERPROFILE/.ssh/id_rsa" -p 61022 -o ConnectTimeout=30 -o ServerAliveInterval=60 \
   "linbokai@btfx-prd-cn-sh-1@pub.737.com"
 ```
 
 确认输出包含 `PULL_OK`。
+
+```bash
+echo 'cd ~/Exel_VIP && kill $(lsof -t -i:8085) 2>/dev/null; source venv/bin/activate && nohup python app.py --port 8085 > app.log 2>&1 & sleep 2 && curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8085/ && echo " RESTART_OK"; exit' | \
+  ssh -T -i "$USERPROFILE/.ssh/id_rsa" -p 61022 -o ConnectTimeout=30 -o ServerAliveInterval=60 \
+  "linbokai@btfx-prd-cn-sh-1@pub.737.com"
+```
+
+确认输出包含 `200 RESTART_OK`。
+
+访问地址：http://106.15.191.84:8085
 
 ### Step 3 — 切回开发分支
 

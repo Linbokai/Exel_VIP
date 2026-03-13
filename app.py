@@ -16,8 +16,11 @@ Flask Web 界面 + RESTful API。
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 
+import json
 import logging
 import traceback
+import threading
+import queue
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
@@ -118,6 +121,82 @@ def generate():
     except Exception as e:
         logger.error(f"生成日报失败: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/generate-stream", methods=["POST"])
+@auth_required
+def generate_stream():
+    """SSE 流式生成日报（实时推送进度）"""
+    date_str = request.json.get("date")
+    if not date_str:
+        return jsonify({"success": False, "error": "请选择日期"}), 400
+
+    try:
+        report_date = datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return jsonify({"success": False, "error": "日期格式不正确"}), 400
+
+    progress_queue = queue.Queue()
+
+    def on_progress(step, total, desc):
+        progress_queue.put({"type": "progress", "step": step, "total": total, "desc": desc})
+
+    def run_generation():
+        try:
+            result = generate_report(report_date, on_progress=on_progress)
+
+            txt_path = result.builder.save_text()
+
+            xlsx_filename = None
+            try:
+                xlsx_path = result.builder.save_excel()
+                xlsx_filename = Path(xlsx_path).name
+            except Exception:
+                logger.error(f"Excel生成失败:\n{traceback.format_exc()}")
+
+            pdf_filename = None
+            try:
+                pdf_path = result.builder.save_pdf()
+                pdf_filename = Path(pdf_path).name
+            except Exception:
+                logger.error(f"PDF生成失败:\n{traceback.format_exc()}")
+
+            progress_queue.put({
+                "type": "done",
+                "data": {
+                    "success": True,
+                    "report": result.report_text,
+                    "structured": result.structured,
+                    "txt_filename": Path(txt_path).name,
+                    "xlsx_filename": xlsx_filename,
+                    "pdf_filename": pdf_filename,
+                    "stats": result.structured.get("stats", {}),
+                    "trend": result.trend_data,
+                    "errors": result.errors,
+                },
+            })
+        except Exception as e:
+            logger.error(f"生成日报失败: {e}", exc_info=True)
+            progress_queue.put({
+                "type": "done",
+                "data": {"success": False, "error": str(e)},
+            })
+
+    thread = threading.Thread(target=run_generation, daemon=True)
+    thread.start()
+
+    def event_stream():
+        while True:
+            try:
+                msg = progress_queue.get(timeout=600)
+                yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                if msg["type"] == "done":
+                    break
+            except queue.Empty:
+                break
+
+    return Response(event_stream(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/api/report", methods=["GET"])

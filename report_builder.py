@@ -31,6 +31,7 @@ from pathlib import Path
 from config import (
     SUPER_R_THRESHOLD, ISSUE_KEYWORDS,
     OUTPUT_DIR, HANDLER_DEV_KEYWORD, HANDLER_SYSTEM_KEYWORD,
+    DEV_TRANSFER_KEYWORD,
     CF_ISSUE_TYPE, CF_RECHARGE, CF_ISSUE_SELECT,
     STATUS_SOLVED, STATUS_CLOSED,
     ts_to_str, LLM_ENABLED,
@@ -72,6 +73,7 @@ def parse_amount(raw):
 def enrich_ticket_fields(t):
     """为工单提取常用便捷属性，以 _ 前缀存储"""
     t.setdefault("_handler", "")
+    t.setdefault("_has_dev_transfer", False)
     t["_id"] = t.get("id", "")
     t["_title"] = t.get("title", "")
     t["_content"] = t.get("content", "") or t.get("title", "")
@@ -159,13 +161,15 @@ def dedup_tickets(tickets, time_window_ms=3600000):
 def compute_category_stats(session_data, daily_tickets):
     """
     计算问题类型统计数据（从会话监控数据中提取）。
+    运营/研发介入定义：工单日志中存在转交企业微信-飞鱼科技的记录。
     返回 (categories, cat_alarm, cat_dev) 三元组。
     """
     categories = list(ISSUE_KEYWORDS.keys()) + ["其他问题"]
 
+    # 运营介入判定：工单日志中有转交飞鱼科技的记录
     dev_creators = {
         t["_creator"] for t in daily_tickets
-        if HANDLER_DEV_KEYWORD in (t.get("_handler") or "")
+        if t.get("_has_dev_transfer", False)
     }
 
     cat_alarm = Counter()
@@ -192,6 +196,7 @@ def compute_category_stats(session_data, daily_tickets):
 def compute_ticket_category_stats(daily_tickets):
     """
     基于工单数据计算问题类型统计（当会话数据不可用时的备用方案）。
+    运营/研发介入定义：工单日志中存在转交企业微信-飞鱼科技的记录。
     """
     categories = list(ISSUE_KEYWORDS.keys()) + ["其他问题"]
     cat_count = Counter()
@@ -200,7 +205,7 @@ def compute_ticket_category_stats(daily_tickets):
     for t in daily_tickets:
         cat = classify_ticket(t)
         cat_count[cat] += 1
-        if HANDLER_DEV_KEYWORD in (t.get("_handler") or ""):
+        if t.get("_has_dev_transfer", False):
             cat_dev[cat] += 1
 
     return categories, cat_count, cat_dev
@@ -250,32 +255,43 @@ class ReportBuilder:
 
     # ==================== 内容摘要 ====================
 
-    def _summarize(self, t, max_len=80):
-        """精简总结工单内容（优先使用AI摘要）"""
+    def _get_latest_reply(self, t):
+        """获取工单最新回复内容"""
+        for entry in reversed(t.get("_log", [])):
+            for info in entry.get("info", []):
+                c = info.get("content", "")
+                if c and "回复" in info.get("title", info.get("titleLang", "")):
+                    return c
+        return ""
+
+    def _summarize(self, t, max_len=0):
+        """
+        工单内容摘要。
+        优先级：AI摘要 > 最新回复完整内容 > 标题+工单内容
+        max_len=0 表示不截断（Web端）。
+        """
         # AI摘要优先
         ai_summary = t.get("_ai_summary")
         if ai_summary:
             return ai_summary
 
-        parts = []
         title = t.get("_title", "")
         content = t.get("_content", "")
-        if title:
-            parts.append(title)
-        if content and content != title:
-            parts.append(content)
+        latest_reply = self._get_latest_reply(t)
 
-        for entry in reversed(t.get("_log", [])):
-            for info in entry.get("info", []):
-                c = info.get("content", "")
-                if c and "回复" in info.get("title", info.get("titleLang", "")):
-                    parts.append(f"[回复]{c}")
-                    break
-            if len(parts) >= 3:
-                break
+        if latest_reply:
+            # 有回复时：标题 + 最新回复完整内容
+            summary = f"{title}；[最新回复]{latest_reply}" if title else latest_reply
+        else:
+            # 无回复时：标题+内容
+            parts = []
+            if title:
+                parts.append(title)
+            if content and content != title:
+                parts.append(content)
+            summary = "；".join(parts)
 
-        summary = "；".join(parts)
-        if len(summary) > max_len:
+        if max_len and len(summary) > max_len:
             summary = summary[:max_len - 3] + "..."
         return summary or "（无内容）"
 
@@ -298,7 +314,7 @@ class ReportBuilder:
     def _format_order(self, t, show_amount=False, show_resolved=False):
         """格式化单条工单"""
         oid = t["_id"]
-        summary = self._summarize(t)
+        summary = self._summarize(t, max_len=120)
         creator = t["_creator"] or "未知"
         ct = ts_to_str(t["_create_time"])
         ut = ts_to_str(t["_update_time"])
@@ -523,7 +539,7 @@ class ReportBuilder:
             return {
                 "id": t.get("_id", ""),
                 "title": t.get("_title", ""),
-                "summary": self._summarize(t),
+                "summary": self._summarize(t, max_len=0),
                 "creator": t.get("_creator", ""),
                 "create_time": ts_to_str(t.get("_create_time", 0)),
                 "update_time": ts_to_str(t.get("_update_time", 0)),
@@ -812,7 +828,7 @@ class ReportBuilder:
                 return row + 1
 
             # 表头
-            cols = ["序号", "工单号", "发起人", "工单内容", "创建时间", "更新时间"]
+            cols = ["序号", "发起人", "工单内容", "创建时间", "更新时间", "受理人"]
             if show_amount:
                 cols.append("累充金额")
             if show_resolved:
@@ -828,11 +844,11 @@ class ReportBuilder:
             for i, t in enumerate(orders, 1):
                 values = [
                     i,
-                    t["_id"],
                     t.get("_creator", ""),
-                    self._summarize(t, max_len=120),
+                    self._summarize(t, max_len=200),
                     ts_to_str(t.get("_create_time", 0)),
                     ts_to_str(t.get("_update_time", 0)),
+                    t.get("_handler", ""),
                 ]
                 if show_amount:
                     amt = t["_recharge"]
@@ -845,7 +861,7 @@ class ReportBuilder:
                     cell = ws.cell(row=row, column=col, value=safe(v))
                     cell.font = normal_font
                     cell.border = thin_border
-                    if col == 4:
+                    if col == 3:  # 工单内容列自动换行
                         cell.alignment = wrap
                     else:
                         cell.alignment = Alignment(vertical="center")
@@ -911,13 +927,13 @@ class ReportBuilder:
         row = _write_section_table(ws, row, f"七、其他VIP用户反馈 (共{len(other_orders)}条)", other_orders, show_resolved=True)
 
         # ---- 列宽 ----
-        ws.column_dimensions["A"].width = 8
-        ws.column_dimensions["B"].width = 14
-        ws.column_dimensions["C"].width = 16
-        ws.column_dimensions["D"].width = 50
-        ws.column_dimensions["E"].width = 18
-        ws.column_dimensions["F"].width = 18
-        ws.column_dimensions["G"].width = 12
+        ws.column_dimensions["A"].width = 6   # 序号
+        ws.column_dimensions["B"].width = 14  # 发起人
+        ws.column_dimensions["C"].width = 55  # 工单内容
+        ws.column_dimensions["D"].width = 18  # 创建时间
+        ws.column_dimensions["E"].width = 18  # 更新时间
+        ws.column_dimensions["F"].width = 16  # 受理人
+        ws.column_dimensions["G"].width = 12  # 累充金额/状态
         ws.column_dimensions["H"].width = 10
 
         # ---- 冻结表头 ----

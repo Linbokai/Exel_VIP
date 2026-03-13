@@ -21,6 +21,7 @@ from config import (
     APP_KEY, APP_SECRET, BASE_URL, API,
     WORKORDER_TEMPLATE_NAME, WORKORDER_TEMPLATE_ID,
     STATUS_PENDING, API_MAX_WORKERS, API_RATE_LIMIT, API_RATE_BURST,
+    DEV_TRANSFER_KEYWORD,
 )
 from rate_limiter import TokenBucketRateLimiter
 
@@ -226,10 +227,12 @@ class QiyuClient:
             log_entries = self.get_ticket_log(tid)
             ticket["_log"] = log_entries
             ticket["_handler"] = self._parse_handler(log_entries)
+            ticket["_has_dev_transfer"] = self._has_dev_transfer(log_entries)
         except Exception as e:
             logger.warning(f"获取工单日志失败 #{tid}: {e}")
             ticket["_log"] = []
             ticket["_handler"] = ""
+            ticket["_has_dev_transfer"] = False
 
         return ticket
 
@@ -295,6 +298,26 @@ class QiyuClient:
                     # 如果没有"更改为"格式，直接返回内容
                     return content
         return ""
+
+    @staticmethod
+    def _has_dev_transfer(log_entries):
+        """
+        检查工单日志中是否存在转交给企业微信-飞鱼科技的记录。
+        遍历所有日志条目，匹配含"转交"的操作中是否涉及飞鱼科技。
+        """
+        if not log_entries:
+            return False
+        for entry in log_entries:
+            info_list = entry.get("info", [])
+            for info in info_list:
+                title = info.get("title", "") or info.get("titleLang", "")
+                if "转交" not in title:
+                    continue
+                # 检查整个 entry 是否包含飞鱼科技（覆盖 content、operator 等各种字段）
+                entry_text = json.dumps(entry, ensure_ascii=False)
+                if DEV_TRANSFER_KEYWORD in entry_text:
+                    return True
+        return False
 
     # ==================== 便捷方法：批量获取 ====================
 
