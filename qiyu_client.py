@@ -357,20 +357,15 @@ class QiyuClient:
     def _has_dev_transfer(log_entries):
         """
         检查工单日志中是否存在转交给企业微信-飞鱼科技的记录。
-        遍历所有日志条目，匹配含"转交"的操作中是否涉及飞鱼科技。
+        将每条日志序列化为文本，同时包含"转交"和"飞鱼科技"即判定为运营/研发介入。
         """
         if not log_entries:
             return False
         for entry in log_entries:
-            info_list = entry.get("info", [])
-            for info in info_list:
-                title = info.get("title", "") or info.get("titleLang", "")
-                if "转交" not in title:
-                    continue
-                # 检查整个 entry 是否包含飞鱼科技（覆盖 content、operator 等各种字段）
-                entry_text = json.dumps(entry, ensure_ascii=False)
-                if DEV_TRANSFER_KEYWORD in entry_text:
-                    return True
+            entry_text = json.dumps(entry, ensure_ascii=False)
+            if "转交" in entry_text and DEV_TRANSFER_KEYWORD in entry_text:
+                logger.debug(f"匹配到研发介入转交记录: {entry_text[:200]}")
+                return True
         return False
 
     # ==================== 便捷方法：批量获取 ====================
@@ -570,6 +565,7 @@ class QiyuClient:
         """
         获取「倍特VIP工单组」的会话总量。
         使用 model=2（按客服组），直接读取匹配组的 totalSessionCount。
+        只用一个数据源，避免多个兜底导致每次数值不同。
         """
 
         # 将endTime限制为当前时间（统计API不接受未来时间）
@@ -577,40 +573,15 @@ class QiyuClient:
         if end_time > now_ms:
             end_time = now_ms
 
-        # 1. 工作量报表 model=2（按客服组），直接读总计
-        try:
-            workload = self.get_staff_workload(start_time, end_time, model=2)
-            if isinstance(workload, list):
-                for group in workload:
-                    group_name = group.get("groupName", "") or group.get("name", "")
-                    if AGENT_GROUP in group_name:
-                        count = int(group.get("totalSessionCount", 0) or 0)
-                        logger.info(f"匹配组「{group_name}」: totalSessionCount={count}")
-                        if count > 0:
-                            return count
-        except Exception as e:
-            logger.warning(f"获取工作量报表(按组)失败: {e}")
-
-        # 2. 兜底：历史数据总览（全局会话数）
-        try:
-            overview = self.get_overview(start_time, end_time)
-            if isinstance(overview, dict):
-                count = overview.get("sessions") or overview.get("totalSessionCount")
-                if count is not None and int(count) > 0:
-                    logger.info(f"使用历史总览兜底: sessions={count}")
-                    return int(count)
-        except Exception as e:
-            logger.warning(f"获取总览失败: {e}")
-
-        # 3. 实时会话概览（当日实时数据）
-        try:
-            msg = self.get_realtime_session_stats()
-            if isinstance(msg, dict):
-                count = msg.get("totalSessionCount", 0)
-                if count and int(count) > 0:
-                    logger.info(f"使用实时会话概览兜底: totalSessionCount={count}")
-                    return int(count)
-        except Exception as e:
-            logger.warning(f"获取实时会话概览失败: {e}")
+        workload = self.get_staff_workload(start_time, end_time, model=2)
+        if isinstance(workload, list):
+            for group in workload:
+                group_name = group.get("groupName", "") or group.get("name", "")
+                if AGENT_GROUP in group_name:
+                    count = int(group.get("totalSessionCount", 0) or 0)
+                    logger.info(f"匹配组「{group_name}」: totalSessionCount={count}")
+                    return count
+            all_groups = [g.get("groupName", g.get("name", "?")) for g in workload]
+            logger.warning(f"未匹配到「{AGENT_GROUP}」，可用组: {all_groups}")
 
         return 0
