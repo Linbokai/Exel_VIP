@@ -573,6 +573,11 @@ class QiyuClient:
                 logger.warning(f"工作量报表(model={model}) dict响应无可解析列表, keys={list(msg.keys())}, raw={str(msg)[:500]}")
                 return []
             if isinstance(msg, list):
+                if not msg:
+                    logger.warning(
+                        f"工作量报表(model={model}) message直接返回空列表,"
+                        f" code={code}, raw={json.dumps(data, ensure_ascii=False)[:800]}"
+                    )
                 return msg
             logger.warning(f"工作量报表返回非预期类型: code={code}, msg_type={type(msg).__name__}, msg={str(msg)[:200]}")
             return []
