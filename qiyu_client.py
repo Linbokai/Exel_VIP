@@ -590,8 +590,11 @@ class QiyuClient:
 
     def get_total_session_count(self, start_time, end_time):
         """
-        获取会话总量 = 所有客服个人的 totalSessionCount 相加（排除"总计"行）。
-        使用 model=3（按客服个人）。
+        获取会话总量。
+        优先级：
+          1. overview API 的 sessions 字段（最权威，与后台一致）
+          2. staffworkload model=1（全部汇总）的 totalSessionCount
+          3. staffworkload model=3（按客服）累加
         """
 
         # 将endTime限制为当前时间（统计API不接受未来时间）
@@ -599,40 +602,63 @@ class QiyuClient:
         if end_time > now_ms:
             end_time = now_ms
 
+        # 方案1：overview API — sessions 字段直接就是会话总量
+        try:
+            overview = self.get_overview(start_time, end_time)
+            logger.info(f"overview 原始数据: {str(overview)[:500]}")
+            if isinstance(overview, dict):
+                # 七鱼 overview 返回 sessions（会话总量）
+                sessions = overview.get("sessions") or overview.get("sessionCount")
+                if sessions is not None:
+                    count = int(sessions)
+                    logger.info(f"会话总量（overview.sessions）: {count}")
+                    return count
+            elif isinstance(overview, list) and overview:
+                # 有时返回列表，取第一条
+                item = overview[0] if isinstance(overview[0], dict) else {}
+                sessions = item.get("sessions") or item.get("sessionCount")
+                if sessions is not None:
+                    count = int(sessions)
+                    logger.info(f"会话总量（overview[0].sessions）: {count}")
+                    return count
+            logger.warning(f"overview 未找到 sessions 字段: {str(overview)[:300]}")
+        except Exception as e:
+            logger.warning(f"overview 调用失败: {e}")
+
+        # 方案2：staffworkload model=1（全部汇总）
+        try:
+            all_data = self.get_staff_workload(start_time, end_time, model=1)
+            logger.info(f"model=1 原始数据: {str(all_data)[:500]}")
+            if isinstance(all_data, list) and all_data:
+                # model=1 通常返回单条汇总记录
+                item = all_data[0] if isinstance(all_data[0], dict) else {}
+                count = int(item.get("totalSessionCount", 0) or 0)
+                if count > 0:
+                    logger.info(f"会话总量（model=1.totalSessionCount）: {count}")
+                    return count
+            elif isinstance(all_data, dict):
+                count = int(all_data.get("totalSessionCount", 0) or 0)
+                if count > 0:
+                    logger.info(f"会话总量（model=1 dict.totalSessionCount）: {count}")
+                    return count
+        except Exception as e:
+            logger.warning(f"staffworkload(model=1) 调用失败: {e}")
+
+        # 方案3：staffworkload model=3（按客服个人累加）
         try:
             staff_list = self.get_staff_workload(start_time, end_time, model=3)
             if isinstance(staff_list, list) and staff_list:
-                # 先打印第一条记录的所有字段，方便排查
-                logger.info(f"model=3 第一条记录keys: {list(staff_list[0].keys()) if staff_list else '空'}")
                 logger.info(f"model=3 第一条记录: {str(staff_list[0])[:500]}")
                 total = 0
                 for staff in staff_list:
                     name = staff.get("staffName", "") or staff.get("name", "") or ""
-                    # 只跳过明确的"总计"行，不跳过空名字
                     if name.strip() in ("总计", "合计", "total"):
                         continue
                     count = int(staff.get("totalSessionCount", 0) or 0)
                     total += count
-                    logger.debug(f"  客服「{name}」: totalSessionCount={count}")
-                logger.info(f"会话总量（按客服累加）: {total}（共 {len(staff_list)} 条记录）")
+                logger.info(f"会话总量（model=3 累加）: {total}（共 {len(staff_list)} 条记录）")
                 return total
-            else:
-                logger.warning(f"staffworklod(model=3) 返回非预期: type={type(staff_list).__name__}, "
-                               f"value={str(staff_list)[:300]}")
         except Exception as e:
-            logger.warning(f"staffworklod(model=3) 调用失败: {e}")
-
-        # 兜底：用 model=2 按客服组，取匹配组的 totalSessionCount
-        try:
-            workload = self.get_staff_workload(start_time, end_time, model=2)
-            if isinstance(workload, list) and workload:
-                for group in workload:
-                    group_name = group.get("groupName", "") or group.get("name", "")
-                    if AGENT_GROUP in group_name:
-                        count = int(group.get("totalSessionCount", 0) or 0)
-                        logger.info(f"兜底：匹配组「{group_name}」totalSessionCount={count}")
-                        return count
-        except Exception as e:
-            logger.warning(f"staffworklod(model=2) 兜底失败: {e}")
+            logger.warning(f"staffworkload(model=3) 调用失败: {e}")
 
         return 0
