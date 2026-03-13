@@ -161,34 +161,30 @@ def dedup_tickets(tickets, time_window_ms=3600000):
 def compute_category_stats(session_data, daily_tickets):
     """
     计算问题类型统计数据（从会话监控数据中提取）。
-    运营/研发介入定义：工单日志中存在转交企业微信-飞鱼科技的记录。
+    运营/研发介入定义：日报当天有提交工单，且工单日志中存在转交企业微信-飞鱼科技的记录。
+    注意：运营介入统计始终基于工单数据（而非会话），确保匹配准确。
     返回 (categories, cat_alarm, cat_dev) 三元组。
     """
     categories = list(ISSUE_KEYWORDS.keys()) + ["其他问题"]
 
-    # 运营介入判定：工单日志中有转交飞鱼科技的记录
-    dev_creators = {
-        t["_creator"] for t in daily_tickets
-        if t.get("_has_dev_transfer", False)
-    }
-
     cat_alarm = Counter()
-    cat_dev = Counter()
     for sess in session_data:
         content = sess.get("content", "") or sess.get("message", "") or ""
-        visitor = sess.get("visitorName", "") or sess.get("userId", "")
         matched = False
         for category, keywords in ISSUE_KEYWORDS.items():
             if any(kw in content for kw in keywords):
                 cat_alarm[category] += 1
-                if visitor in dev_creators:
-                    cat_dev[category] += 1
                 matched = True
                 break
         if not matched:
             cat_alarm["其他问题"] += 1
-            if visitor in dev_creators:
-                cat_dev["其他问题"] += 1
+
+    # 运营/研发介入：基于工单数据统计（工单有转交飞鱼科技记录）
+    cat_dev = Counter()
+    for t in daily_tickets:
+        if t.get("_has_dev_transfer", False):
+            cat = classify_ticket(t)
+            cat_dev[cat] += 1
 
     return categories, cat_alarm, cat_dev
 
@@ -313,19 +309,18 @@ class ReportBuilder:
 
     def _format_order(self, t, show_amount=False, show_resolved=False):
         """格式化单条工单"""
-        oid = t["_id"]
-        summary = self._summarize(t, max_len=120)
+        summary = self._summarize(t)
         creator = t["_creator"] or "未知"
-        ct = ts_to_str(t["_create_time"])
         ut = ts_to_str(t["_update_time"])
+        handler = t.get("_handler", "") or ""
 
-        line = f"工单号：{oid}，工单内容：{summary}"
+        line = f"工单内容：{summary}"
         if show_amount:
             amt = t["_recharge"]
             amt_str = f"{amt/10000:.1f}W" if amt >= 10000 else f"{amt:.0f}元"
             line += f"（{amt_str}）"
 
-        line += f"\n    发起人：{creator}，创建时间：{ct}，更新时间：{ut}"
+        line += f"\n    发起人：{creator}，更新时间：{ut}，受理人：{handler or '无'}"
 
         if show_resolved:
             resolved = t["_status"] in (STATUS_SOLVED, STATUS_CLOSED)
@@ -845,7 +840,7 @@ class ReportBuilder:
                 values = [
                     i,
                     t.get("_creator", ""),
-                    self._summarize(t, max_len=200),
+                    self._summarize(t),
                     ts_to_str(t.get("_create_time", 0)),
                     ts_to_str(t.get("_update_time", 0)),
                     t.get("_handler", ""),
