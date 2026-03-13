@@ -570,8 +570,7 @@ class QiyuClient:
         """
         获取「倍特VIP工单组」的会话总量（与七鱼坐席工作量报表对齐）。
         使用 model=2（按客服组）查询，筛选出目标组的数据。
-        注意：使用 sessionCount 字段（= 接入 + 主动发起 = 页面"会话总量"），
-        而非 totalSessionCount（含转接等，数值偏大）。
+        页面"会话总量" = 接入(inSessionCount) + 主动发起(activeSessionCount)。
         """
 
         # 将endTime限制为当前时间（统计API不接受未来时间）
@@ -587,11 +586,13 @@ class QiyuClient:
                 for group in workload:
                     group_name = group.get("groupName", "") or group.get("name", "")
                     if AGENT_GROUP in group_name:
-                        # sessionCount = 页面"会话总量"（接入+主动发起）
-                        count = group.get("sessionCount", 0)
-                        logger.info(f"匹配组「{group_name}」: sessionCount={count}")
-                        if count and int(count) > 0:
-                            return int(count)
+                        # 页面"会话总量" = 接入 + 主动发起
+                        in_count = int(group.get("inSessionCount", 0) or 0)
+                        active_count = int(group.get("activeSessionCount", 0) or 0)
+                        count = in_count + active_count
+                        logger.info(f"匹配组「{group_name}」: inSessionCount={in_count}, activeSessionCount={active_count}, 会话总量={count}")
+                        if count > 0:
+                            return count
                 # 没匹配到目标组，记录所有组名便于排查
                 all_groups = [g.get("groupName", g.get("name", "?")) for g in workload]
                 logger.warning(f"未匹配到「{AGENT_GROUP}」，可用组: {all_groups}")
