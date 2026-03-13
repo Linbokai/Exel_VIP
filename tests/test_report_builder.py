@@ -6,14 +6,14 @@ ReportBuilder 单元测试
 import pytest
 from datetime import datetime
 
-from report_builder import (
+from ticket_utils import (
     parse_amount,
     classify_ticket,
     dedup_tickets,
     enrich_ticket_fields,
     get_custom_field,
-    ReportBuilder,
 )
+from report_builder import ReportBuilder
 
 
 # ==================== parse_amount ====================
