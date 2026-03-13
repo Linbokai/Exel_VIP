@@ -166,7 +166,7 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
     if fetch_trends:
         result.trend_data = _fetch_trend_data(client, report_date)
 
-    # 5. 构建日报
+    # 6. 构建日报
     _progress("构建日报...")
     result.builder = ReportBuilder(
         daily_tickets=result.daily_tickets,
@@ -177,8 +177,14 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
         trend_data=result.trend_data,
         errors=result.errors,
     )
-    result.report_text = result.builder.build()
-    result.structured = result.builder.build_structured()
+    try:
+        result.report_text = result.builder.build()
+        result.structured = result.builder.build_structured()
+    except Exception as e:
+        logger.error(f"日报构建失败: {e}", exc_info=True)
+        result.report_text = f"[日报构建失败: {e}]"
+        result.structured = {}
+        result.errors.append("日报构建")
 
     # 缓存日报
     if cache:
