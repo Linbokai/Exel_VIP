@@ -48,6 +48,12 @@ class TicketCache:
                 ON ticket_cache(updated_at);
             CREATE INDEX IF NOT EXISTS idx_report_cached
                 ON report_cache(cached_at);
+            CREATE TABLE IF NOT EXISTS session_count_cache (
+                date_key    TEXT PRIMARY KEY,
+                count       INTEGER NOT NULL,
+                source      TEXT NOT NULL DEFAULT 'api',
+                cached_at   REAL NOT NULL
+            );
         """)
         conn.close()
 
@@ -131,6 +137,27 @@ class TicketCache:
             """INSERT OR REPLACE INTO report_cache
                (cache_key, data, cached_at) VALUES (?, ?, ?)""",
             (cache_key, json.dumps(data, ensure_ascii=False), time.time()),
+        )
+        conn.commit()
+
+    def get_session_count(self, date_key):
+        """获取缓存的会话总量（永不过期）"""
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT count, source FROM session_count_cache WHERE date_key = ?",
+            (date_key,),
+        ).fetchone()
+        if row:
+            return {"count": row[0], "source": row[1]}
+        return None
+
+    def set_session_count(self, date_key, count, source="api"):
+        """缓存会话总量"""
+        conn = self._get_conn()
+        conn.execute(
+            """INSERT OR REPLACE INTO session_count_cache
+               (date_key, count, source, cached_at) VALUES (?, ?, ?, ?)""",
+            (date_key, count, source, time.time()),
         )
         conn.commit()
 

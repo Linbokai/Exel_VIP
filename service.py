@@ -129,18 +129,32 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
             _progress("构建完成")
             return result
 
-    # 1. 获取总会话量（最先调用，避免被后续大量工单API消耗频率配额）
-    # 会话统计使用完整自然日（00:00~23:59），与七鱼坐席工作量报表对齐
+    # 1. 获取总会话量
+    # 优先从缓存读取（手动设置或之前API成功获取的值），避免消耗 staffworklod API 配额
     session_day = report_date.replace(hour=0, minute=0, second=0, microsecond=0)
     session_start = int(session_day.timestamp() * 1000)
     session_end = int(session_day.replace(hour=23, minute=59, second=59).timestamp() * 1000)
+    date_key = report_date.strftime("%Y%m%d")
     _progress("获取会话统计...")
-    try:
-        result.total_sessions = client.get_total_session_count(session_start, session_end)
-        logger.info(f"总会话量: {result.total_sessions}")
-    except Exception as e:
-        logger.error(f"获取总会话量失败: {e}", exc_info=True)
-        result.errors.append("总会话量")
+
+    # 先查缓存
+    if cache:
+        cached_sc = cache.get_session_count(date_key)
+        if cached_sc:
+            result.total_sessions = cached_sc["count"]
+            logger.info(f"总会话量(缓存, source={cached_sc['source']}): {result.total_sessions}")
+
+    # 缓存未命中才调API
+    if result.total_sessions == 0:
+        try:
+            result.total_sessions = client.get_total_session_count(session_start, session_end)
+            logger.info(f"总会话量(API): {result.total_sessions}")
+            # API成功则缓存
+            if cache and result.total_sessions > 0:
+                cache.set_session_count(date_key, result.total_sessions, source="api")
+        except Exception as e:
+            logger.error(f"获取总会话量失败: {e}", exc_info=True)
+            result.errors.append("总会话量")
 
     # 2. 获取当日工单
     daily_start, daily_end = get_report_time_range(report_date)

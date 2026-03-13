@@ -240,6 +240,63 @@ def api_report():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/session-count", methods=["POST"])
+@auth_required
+def set_session_count():
+    """手动设置某日的会话总量（用于七鱼API不可用时从后台手动录入）"""
+    from cache import TicketCache
+    data = request.get_json()
+    date_str = data.get("date")
+    count = data.get("count")
+
+    if not date_str or count is None:
+        return jsonify({"error": "需要 date (YYYY-MM-DD) 和 count 参数"}), 400
+
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        date_key = dt.strftime("%Y%m%d")
+        count = int(count)
+    except (ValueError, TypeError):
+        return jsonify({"error": "参数格式不正确"}), 400
+
+    cache = TicketCache()
+    cache.set_session_count(date_key, count, source="manual")
+
+    # 同时清除该日期的日报缓存，让下次生成时使用新值
+    try:
+        cache._get_conn().execute(
+            "DELETE FROM report_cache WHERE cache_key = ?",
+            (f"report_{date_key}",),
+        )
+        cache._get_conn().commit()
+    except Exception:
+        pass
+
+    logger.info(f"手动设置会话总量: {date_str} = {count}")
+    return jsonify({"success": True, "date": date_str, "count": count})
+
+
+@app.route("/api/session-count", methods=["GET"])
+@auth_required
+def get_session_count():
+    """获取某日缓存的会话总量"""
+    from cache import TicketCache
+    date_str = request.args.get("date")
+    if not date_str:
+        return jsonify({"error": "缺少 date 参数"}), 400
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        date_key = dt.strftime("%Y%m%d")
+    except ValueError:
+        return jsonify({"error": "日期格式不正确"}), 400
+
+    cache = TicketCache()
+    result = cache.get_session_count(date_key)
+    if result:
+        return jsonify({"success": True, **result})
+    return jsonify({"success": False, "message": "无缓存数据"})
+
+
 @app.route("/download/<filename>")
 @auth_required
 def download(filename):
