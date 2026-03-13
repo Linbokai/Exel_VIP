@@ -545,10 +545,27 @@ class QiyuClient:
             "endTime": self._to_seconds(end_time),
             "model": model,
         })
-        msg = data.get("message", data)
+        logger.debug(f"staffworklod raw keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
+
+        # 七鱼API响应格式不固定，尝试多种取法
+        # 优先从 message 取（最常见），再尝试 data、result
+        msg = data.get("message", None)
+        if isinstance(msg, str):
+            # _request 已尝试过 JSON 解析，如果还是 str 说明不是数据
+            msg = None
+        if msg is None:
+            msg = data.get("data", None)
+        if msg is None:
+            msg = data.get("result", None)
+
+        # msg 可能是 dict（包含 result 列表）或直接是 list
         if isinstance(msg, dict):
-            return msg.get("result", [])
-        return msg
+            return msg.get("result", msg.get("data", []))
+        if isinstance(msg, list):
+            return msg
+
+        logger.warning(f"staffworklod 无法解析: raw={json.dumps(data, ensure_ascii=False)[:500]}")
+        return []
 
     def get_overview(self, start_time, end_time):
         """
@@ -559,7 +576,17 @@ class QiyuClient:
             "startTime": self._to_seconds(start_time),
             "endTime": self._to_seconds(end_time),
         })
-        return data.get("message", data)
+        msg = data.get("message", None)
+        if isinstance(msg, str):
+            msg = None
+        if msg is None:
+            msg = data.get("data", None)
+        if msg is None:
+            msg = data.get("result", None)
+        if msg is None:
+            msg = data
+        logger.debug(f"overview parsed: {str(msg)[:300]}")
+        return msg
 
     def get_total_session_count(self, start_time, end_time):
         """
