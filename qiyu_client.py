@@ -619,9 +619,10 @@ class QiyuClient:
         获取VIP部门所有客服组的会话总量合计（与七鱼坐席工作量报表对齐）。
 
         策略（按优先级）：
-          1. model=2（按客服组）→ 匹配所有包含 AGENT_GROUP 前缀的组 → 求和
-          2. model=3（按坐席）→ 筛选属于匹配组的坐席 → 求和 sessionCount
-          3. 实时会话概览 API → 取 sessionInCount 作为近似值
+          1. model=3（按坐席）→ 筛选属于匹配组的坐席 → 求和 sessionCount
+             （model=2 按客服组在当前账号下始终返回空数据，已弃用）
+          2. 历史概览 API → sessions 字段
+          3. 实时会话概览 API → sessionInCount 作为近似值（仅当天有效）
         """
         now_ms = int(time.time() * 1000)
         if end_time > now_ms:
@@ -629,36 +630,7 @@ class QiyuClient:
 
         time.sleep(3)
 
-        # ---------- 方案1: model=2（按客服组）→ 匹配所有VIP组并求和 ----------
-        try:
-            workload = self.get_staff_workload(start_time, end_time, model=2)
-            logger.info(f"工作量报表(按组)返回: {len(workload) if isinstance(workload, list) else type(workload).__name__}")
-            if isinstance(workload, list) and workload:
-                total = 0
-                matched_groups = []
-                all_groups_debug = []
-                for group in workload:
-                    gn = self._extract_group_name(group)
-                    sc = self._extract_session_count(group)
-                    all_groups_debug.append(f"{gn}={sc}")
-                    if AGENT_GROUP in gn:
-                        total += sc
-                        matched_groups.append(f"{gn}={sc}")
-
-                logger.info(f"所有组: {', '.join(all_groups_debug)}")
-                if matched_groups:
-                    logger.info(f"匹配VIP组: {', '.join(matched_groups)}, 合计={total}")
-                    if total > 0:
-                        return total
-                else:
-                    logger.warning(f"未匹配到包含「{AGENT_GROUP}」的组")
-                    if workload:
-                        logger.info(f"API返回首条原始数据(诊断): {json.dumps(workload[0], ensure_ascii=False)[:500]}")
-        except Exception as e:
-            logger.warning(f"获取工作量报表(按组)失败: {e}")
-
-        # ---------- 方案2: model=3（按坐席）→ 筛选组 → 求和 ----------
-        time.sleep(10)
+        # ---------- 方案1: model=3（按坐席）→ 筛选VIP组 → 求和 ----------
         try:
             agents = self.get_staff_workload(start_time, end_time, model=3)
             logger.info(f"工作量报表(按坐席)返回: {len(agents) if isinstance(agents, list) else type(agents).__name__}")
@@ -675,7 +647,8 @@ class QiyuClient:
                         matched.append(f"{a.get('staffName', '?')}[{gn}]={sc}")
                 if matched:
                     logger.info(f"按坐席汇总「{AGENT_GROUP}*」: {', '.join(matched)}, 合计={total}")
-                    return total
+                    if total > 0:
+                        return total
                 logger.warning(f"model=3 未匹配包含「{AGENT_GROUP}」的组，可用组: {sorted(all_groups)}")
                 if agents:
                     logger.info(f"API返回首条原始数据(诊断): {json.dumps(agents[0], ensure_ascii=False)[:500]}")
