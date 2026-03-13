@@ -75,10 +75,9 @@ def _fetch_trend_data(client, report_date):
         trend["prev_pre_churn_count"] = pre_churn
         trend["prev_pre_complaint_count"] = pre_complaint
 
-        try:
-            trend["prev_total_sessions"] = client.get_total_session_count(prev_start, prev_end)
-        except Exception:
-            pass
+        # 注意：不再为趋势数据调用 get_total_session_count，
+        # 因为 staffworklod API 频率限制极严，一次报告生成周期内多次调用必定失败。
+        # 趋势中的 prev_total_sessions 暂不提供。
 
         logger.info(f"趋势数据: {trend}")
 

@@ -552,14 +552,10 @@ class QiyuClient:
                 "model": model,
             })
             code = data.get("code", -1)
-            if code == 14009:
-                wait = 15 * (attempt + 1)
-                logger.warning(f"频率限制(14009)，等待 {wait}s 后重试 [{attempt+1}/{retries}]")
-                time.sleep(wait)
-                continue
-            if code == 14500:
-                wait = 15 * (attempt + 1)
-                logger.warning(f"内部错误(14500)，等待 {wait}s 后重试 [{attempt+1}/{retries}]")
+            if code in (14009, 14500):
+                wait = 30 * (attempt + 1)
+                label = "频率限制" if code == 14009 else "内部错误"
+                logger.warning(f"{label}({code})，等待 {wait}s 后重试 [{attempt+1}/{retries}]")
                 time.sleep(wait)
                 continue
             msg = data.get("message", data)
@@ -628,7 +624,7 @@ class QiyuClient:
         if end_time > now_ms:
             end_time = now_ms
 
-        time.sleep(3)
+        time.sleep(5)
 
         # ---------- 方案1: model=3（按坐席）→ 筛选VIP组 → 求和 ----------
         try:
