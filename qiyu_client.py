@@ -590,9 +590,8 @@ class QiyuClient:
 
     def get_total_session_count(self, start_time, end_time):
         """
-        获取「倍特VIP工单组」的会话总量。
-        优先使用 staffworklod API（model=2 按客服组），
-        若失败则用 overview API 兜底。
+        获取会话总量 = 所有客服个人的 totalSessionCount 相加（排除"总计"行）。
+        使用 model=3（按客服个人）。
         """
 
         # 将endTime限制为当前时间（统计API不接受未来时间）
@@ -600,7 +599,27 @@ class QiyuClient:
         if end_time > now_ms:
             end_time = now_ms
 
-        # 方案1: staffworklod API（按客服组）
+        try:
+            staff_list = self.get_staff_workload(start_time, end_time, model=3)
+            if isinstance(staff_list, list) and staff_list:
+                total = 0
+                for staff in staff_list:
+                    name = staff.get("staffName", "") or staff.get("name", "") or ""
+                    # 跳过"总计"行
+                    if name.strip() in ("总计", "合计", "total", ""):
+                        continue
+                    count = int(staff.get("totalSessionCount", 0) or 0)
+                    total += count
+                    logger.debug(f"  客服「{name}」: totalSessionCount={count}")
+                logger.info(f"会话总量（按客服累加）: {total}（共 {len(staff_list)} 条记录）")
+                return total
+            else:
+                logger.warning(f"staffworklod(model=3) 返回非预期: type={type(staff_list).__name__}, "
+                               f"value={str(staff_list)[:300]}")
+        except Exception as e:
+            logger.warning(f"staffworklod(model=3) 调用失败: {e}")
+
+        # 兜底：用 model=2 按客服组，取匹配组的 totalSessionCount
         try:
             workload = self.get_staff_workload(start_time, end_time, model=2)
             if isinstance(workload, list) and workload:
@@ -608,31 +627,9 @@ class QiyuClient:
                     group_name = group.get("groupName", "") or group.get("name", "")
                     if AGENT_GROUP in group_name:
                         count = int(group.get("totalSessionCount", 0) or 0)
-                        logger.info(f"匹配组「{group_name}」: totalSessionCount={count}")
+                        logger.info(f"兜底：匹配组「{group_name}」totalSessionCount={count}")
                         return count
-                all_groups = [g.get("groupName", g.get("name", "?")) for g in workload]
-                logger.warning(f"未匹配到「{AGENT_GROUP}」，可用组: {all_groups}")
-            else:
-                logger.warning(f"staffworklod 返回非预期格式: type={type(workload).__name__}, "
-                               f"value={str(workload)[:300]}")
         except Exception as e:
-            logger.warning(f"staffworklod API 调用失败: {e}")
-
-        # 方案2: overview API 兜底（返回全局 sessions）
-        try:
-            overview = self.get_overview(start_time, end_time)
-            if isinstance(overview, dict):
-                count = int(overview.get("sessions", 0) or 0)
-                if count > 0:
-                    logger.info(f"使用 overview 兜底: sessions={count}")
-                    return count
-                # 也检查 effectSessions
-                eff = int(overview.get("effectSessions", 0) or 0)
-                if eff > 0:
-                    logger.info(f"使用 overview 兜底: effectSessions={eff}")
-                    return eff
-            logger.warning(f"overview 也未返回有效会话量: {str(overview)[:300]}")
-        except Exception as e:
-            logger.warning(f"overview API 兜底失败: {e}")
+            logger.warning(f"staffworklod(model=2) 兜底失败: {e}")
 
         return 0
