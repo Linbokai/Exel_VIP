@@ -568,9 +568,8 @@ class QiyuClient:
 
     def get_total_session_count(self, start_time, end_time):
         """
-        获取「倍特VIP工单组」的会话总量（与七鱼坐席工作量报表"总计"行对齐）。
-        使用 model=1（逐个坐席），按 groupName 过滤后求和 totalSessionCount，
-        与页面逐行汇总的逻辑一致。
+        获取「倍特VIP工单组」的会话总量。
+        使用 model=2（按客服组），直接读取匹配组的 totalSessionCount。
         """
 
         # 将endTime限制为当前时间（统计API不接受未来时间）
@@ -578,27 +577,19 @@ class QiyuClient:
         if end_time > now_ms:
             end_time = now_ms
 
-        # 1. 工作量报表 model=1（逐个坐席），按组名过滤后求和
+        # 1. 工作量报表 model=2（按客服组），直接读总计
         try:
-            workload = self.get_staff_workload(start_time, end_time, model=1)
-            logger.info(f"工作量报表(全部)返回: {len(workload) if isinstance(workload, list) else type(workload).__name__}")
+            workload = self.get_staff_workload(start_time, end_time, model=2)
             if isinstance(workload, list):
-                total = 0
-                matched_staff = 0
-                for staff in workload:
-                    group_name = staff.get("groupName", "") or staff.get("group_name", "")
+                for group in workload:
+                    group_name = group.get("groupName", "") or group.get("name", "")
                     if AGENT_GROUP in group_name:
-                        sc = int(staff.get("totalSessionCount", 0) or 0)
-                        total += sc
-                        matched_staff += 1
-                if matched_staff > 0:
-                    logger.info(f"匹配「{AGENT_GROUP}」坐席 {matched_staff} 人, sum(totalSessionCount)={total}")
-                    return total
-                # 没匹配到，记录所有组名便于排查
-                all_groups = set(s.get("groupName", s.get("group_name", "?")) for s in workload)
-                logger.warning(f"未匹配到「{AGENT_GROUP}」，可用组: {all_groups}")
+                        count = int(group.get("totalSessionCount", 0) or 0)
+                        logger.info(f"匹配组「{group_name}」: totalSessionCount={count}")
+                        if count > 0:
+                            return count
         except Exception as e:
-            logger.warning(f"获取工作量报表(全部)失败: {e}")
+            logger.warning(f"获取工作量报表(按组)失败: {e}")
 
         # 2. 兜底：历史数据总览（全局会话数）
         try:
