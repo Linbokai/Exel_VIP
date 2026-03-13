@@ -553,13 +553,25 @@ class QiyuClient:
             })
             code = data.get("code", -1)
             if code == 14009:
-                wait = 10 * (attempt + 1)
+                wait = 15 * (attempt + 1)
                 logger.warning(f"频率限制(14009)，等待 {wait}s 后重试 [{attempt+1}/{retries}]")
+                time.sleep(wait)
+                continue
+            if code == 14500:
+                wait = 15 * (attempt + 1)
+                logger.warning(f"内部错误(14500)，等待 {wait}s 后重试 [{attempt+1}/{retries}]")
                 time.sleep(wait)
                 continue
             msg = data.get("message", data)
             if isinstance(msg, dict):
-                return msg.get("result", [])
+                # 兼容多种响应结构：result / resultList / data
+                for key in ("result", "resultList", "data"):
+                    items = msg.get(key)
+                    if isinstance(items, list):
+                        return items
+                # 没有找到列表字段，记录原始响应用于诊断
+                logger.warning(f"工作量报表(model={model}) dict响应无可解析列表, keys={list(msg.keys())}, raw={str(msg)[:500]}")
+                return []
             if isinstance(msg, list):
                 return msg
             logger.warning(f"工作量报表返回非预期类型: code={code}, msg_type={type(msg).__name__}, msg={str(msg)[:200]}")
@@ -611,7 +623,7 @@ class QiyuClient:
         if end_time > now_ms:
             end_time = now_ms
 
-        time.sleep(1)
+        time.sleep(3)
 
         # ---------- 方案1: model=2（按客服组）→ 匹配所有VIP组并求和 ----------
         try:
@@ -642,7 +654,7 @@ class QiyuClient:
             logger.warning(f"获取工作量报表(按组)失败: {e}")
 
         # ---------- 方案2: model=3（按坐席）→ 筛选组 → 求和 ----------
-        time.sleep(5)
+        time.sleep(10)
         try:
             agents = self.get_staff_workload(start_time, end_time, model=3)
             logger.info(f"工作量报表(按坐席)返回: {len(agents) if isinstance(agents, list) else type(agents).__name__}")
@@ -666,18 +678,33 @@ class QiyuClient:
         except Exception as e:
             logger.warning(f"获取工作量报表(按坐席)失败: {e}")
 
-        # ---------- 方案3: 实时会话概览 → sessionInCount ----------
-        logger.warning("工作量报表API无可用数据，尝试实时会话概览API作为兜底")
+        # ---------- 方案3: 历史概览 API → sessions 字段 ----------
+        logger.warning("工作量报表API无可用数据，尝试历史概览API(stat_overview)")
         time.sleep(3)
         try:
-            overview = self.get_realtime_session_stats()
+            overview = self.get_overview(start_time, end_time)
             if isinstance(overview, dict):
-                session_in = overview.get("sessionInCount")
+                sessions = overview.get("sessions")
+                if sessions is not None and int(sessions) > 0:
+                    count = int(sessions)
+                    logger.info(f"历史概览 sessions={count}")
+                    return count
+                logger.info(f"历史概览返回: sessions={sessions}, 完整字段={json.dumps({k:v for k,v in overview.items() if isinstance(v,(int,float)) and v>0}, ensure_ascii=False)[:300]}")
+        except Exception as e:
+            logger.warning(f"获取历史概览失败: {e}")
+
+        # ---------- 方案4: 实时会话概览 → sessionInCount（仅当天有效） ----------
+        logger.warning("历史概览无数据，尝试实时会话概览API作为最终兜底（注意：仅当天数据准确）")
+        time.sleep(3)
+        try:
+            realtime = self.get_realtime_session_stats()
+            if isinstance(realtime, dict):
+                session_in = realtime.get("sessionInCount")
                 if session_in is not None and int(session_in) > 0:
                     count = int(session_in)
-                    logger.info(f"实时概览 sessionInCount={count} (近似值)")
+                    logger.info(f"实时概览 sessionInCount={count} (近似值，仅当天准确)")
                     return count
-                logger.info(f"实时概览可用字段: { {k: v for k, v in overview.items() if 'ession' in k.lower()} }")
+                logger.info(f"实时概览可用字段: { {k: v for k, v in realtime.items() if 'ession' in k.lower()} }")
         except Exception as e:
             logger.warning(f"获取实时会话概览失败: {e}")
 
