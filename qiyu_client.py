@@ -569,55 +569,59 @@ class QiyuClient:
     def get_total_session_count(self, start_time, end_time):
         """
         获取「倍特VIP工单组」的会话总量（与七鱼坐席工作量报表对齐）。
-        使用 model=2（按客服组）查询，筛选出目标组的数据。
-        注意：使用 sessionCount 字段（= 接入 + 主动发起 = 页面"会话总量"），
-        而非 totalSessionCount（含转接等，数值偏大）。
-        """
 
-        # 将endTime限制为当前时间（统计API不接受未来时间）
+        策略（按优先级）：
+          1. model=2（按客服组）→ 筛选目标组的 sessionCount
+          2. model=3（按坐席）→ 筛选属于目标组的坐席，求和 sessionCount
+             这与七鱼后台「坐席工作量」报表的总计行一致。
+          3. 不再兜底到全局实时会话概览，因为那是全公司数据，会偏大。
+        """
         now_ms = int(time.time() * 1000)
         if end_time > now_ms:
             end_time = now_ms
 
-        # 1. 工作量报表 model=2（按客服组），筛选目标组
+        # 前面的工单搜索/enrichment 会消耗大量 API 配额，
+        # 统计接口前主动等待，避免被 14009 频率限制拦截
+        time.sleep(3)
+
+        # ---------- 方案1: model=2（按客服组） ----------
         try:
             workload = self.get_staff_workload(start_time, end_time, model=2)
             logger.info(f"工作量报表(按组)返回: {len(workload) if isinstance(workload, list) else type(workload).__name__}")
-            if isinstance(workload, list):
+            if isinstance(workload, list) and workload:
                 for group in workload:
                     group_name = group.get("groupName", "") or group.get("name", "")
                     if AGENT_GROUP in group_name:
-                        # sessionCount = 页面"会话总量"（接入+主动发起）
-                        count = group.get("sessionCount", 0)
+                        count = int(group.get("sessionCount", 0) or 0)
                         logger.info(f"匹配组「{group_name}」: sessionCount={count}")
-                        if count and int(count) > 0:
-                            return int(count)
-                # 没匹配到目标组，记录所有组名便于排查
+                        if count > 0:
+                            return count
                 all_groups = [g.get("groupName", g.get("name", "?")) for g in workload]
                 logger.warning(f"未匹配到「{AGENT_GROUP}」，可用组: {all_groups}")
         except Exception as e:
             logger.warning(f"获取工作量报表(按组)失败: {e}")
 
-        # 2. 兜底：历史数据总览（全局会话数）
+        # ---------- 方案2: model=3（按坐席）→ 筛选组 → 求和 ----------
+        time.sleep(3)
         try:
-            overview = self.get_overview(start_time, end_time)
-            if isinstance(overview, dict):
-                count = overview.get("sessions") or overview.get("totalSessionCount")
-                if count is not None and int(count) > 0:
-                    logger.info(f"使用历史总览兜底: sessions={count}")
-                    return int(count)
+            agents = self.get_staff_workload(start_time, end_time, model=3)
+            logger.info(f"工作量报表(按坐席)返回: {len(agents) if isinstance(agents, list) else type(agents).__name__}")
+            if isinstance(agents, list) and agents:
+                total = 0
+                matched = []
+                for a in agents:
+                    gn = a.get("groupName", "") or a.get("group", "")
+                    if AGENT_GROUP in str(gn):
+                        sc = int(a.get("sessionCount", 0) or 0)
+                        total += sc
+                        matched.append(f"{a.get('staffName', '?')}={sc}")
+                if matched:
+                    logger.info(f"按坐席汇总「{AGENT_GROUP}」: {', '.join(matched)}, 合计={total}")
+                    return total
+                all_groups = sorted({a.get("groupName", a.get("group", "?")) for a in agents})
+                logger.warning(f"model=3 未匹配组「{AGENT_GROUP}」，可用组: {all_groups}")
         except Exception as e:
-            logger.warning(f"获取总览失败: {e}")
+            logger.warning(f"获取工作量报表(按坐席)失败: {e}")
 
-        # 3. 实时会话概览（当日实时数据）
-        try:
-            msg = self.get_realtime_session_stats()
-            if isinstance(msg, dict):
-                count = msg.get("totalSessionCount", 0)
-                if count and int(count) > 0:
-                    logger.info(f"使用实时会话概览兜底: totalSessionCount={count}")
-                    return int(count)
-        except Exception as e:
-            logger.warning(f"获取实时会话概览失败: {e}")
-
+        logger.error("所有统计方案均未获取到VIP组会话量，返回0")
         return 0
