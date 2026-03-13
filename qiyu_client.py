@@ -602,11 +602,14 @@ class QiyuClient:
         try:
             staff_list = self.get_staff_workload(start_time, end_time, model=3)
             if isinstance(staff_list, list) and staff_list:
+                # 先打印第一条记录的所有字段，方便排查
+                logger.info(f"model=3 第一条记录keys: {list(staff_list[0].keys()) if staff_list else '空'}")
+                logger.info(f"model=3 第一条记录: {str(staff_list[0])[:500]}")
                 total = 0
                 for staff in staff_list:
                     name = staff.get("staffName", "") or staff.get("name", "") or ""
-                    # 跳过"总计"行
-                    if name.strip() in ("总计", "合计", "total", ""):
+                    # 只跳过明确的"总计"行，不跳过空名字
+                    if name.strip() in ("总计", "合计", "total"):
                         continue
                     count = int(staff.get("totalSessionCount", 0) or 0)
                     total += count
