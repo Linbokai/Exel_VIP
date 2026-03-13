@@ -570,6 +570,7 @@ class QiyuClient:
         """
         获取「倍特VIP工单组」的会话总量。
         使用 model=2（按客服组），直接读取匹配组的 totalSessionCount。
+        只用一个数据源，避免多个兜底导致每次数值不同。
         """
 
         # 将endTime限制为当前时间（统计API不接受未来时间）
@@ -577,40 +578,15 @@ class QiyuClient:
         if end_time > now_ms:
             end_time = now_ms
 
-        # 1. 工作量报表 model=2（按客服组），直接读总计
-        try:
-            workload = self.get_staff_workload(start_time, end_time, model=2)
-            if isinstance(workload, list):
-                for group in workload:
-                    group_name = group.get("groupName", "") or group.get("name", "")
-                    if AGENT_GROUP in group_name:
-                        count = int(group.get("totalSessionCount", 0) or 0)
-                        logger.info(f"匹配组「{group_name}」: totalSessionCount={count}")
-                        if count > 0:
-                            return count
-        except Exception as e:
-            logger.warning(f"获取工作量报表(按组)失败: {e}")
-
-        # 2. 兜底：历史数据总览（全局会话数）
-        try:
-            overview = self.get_overview(start_time, end_time)
-            if isinstance(overview, dict):
-                count = overview.get("sessions") or overview.get("totalSessionCount")
-                if count is not None and int(count) > 0:
-                    logger.info(f"使用历史总览兜底: sessions={count}")
-                    return int(count)
-        except Exception as e:
-            logger.warning(f"获取总览失败: {e}")
-
-        # 3. 实时会话概览（当日实时数据）
-        try:
-            msg = self.get_realtime_session_stats()
-            if isinstance(msg, dict):
-                count = msg.get("totalSessionCount", 0)
-                if count and int(count) > 0:
-                    logger.info(f"使用实时会话概览兜底: totalSessionCount={count}")
-                    return int(count)
-        except Exception as e:
-            logger.warning(f"获取实时会话概览失败: {e}")
+        workload = self.get_staff_workload(start_time, end_time, model=2)
+        if isinstance(workload, list):
+            for group in workload:
+                group_name = group.get("groupName", "") or group.get("name", "")
+                if AGENT_GROUP in group_name:
+                    count = int(group.get("totalSessionCount", 0) or 0)
+                    logger.info(f"匹配组「{group_name}」: totalSessionCount={count}")
+                    return count
+            all_groups = [g.get("groupName", g.get("name", "?")) for g in workload]
+            logger.warning(f"未匹配到「{AGENT_GROUP}」，可用组: {all_groups}")
 
         return 0
