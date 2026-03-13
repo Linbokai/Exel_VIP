@@ -72,7 +72,7 @@ def ts_to_str(ts_ms):
 # ======================== 业务参数 ========================
 WORKORDER_TEMPLATE_NAME = "VIP用户运营工单"
 WORKORDER_TEMPLATE_ID = 6093346  # 通过API确认的模板ID
-AGENT_GROUP = "倍特VIP工单组"
+AGENT_GROUP = "倍特VIP"  # 前缀匹配，覆盖所有VIP组（工单组、外包组、VIP二组等）
 SUPER_R_THRESHOLD = 100000  # 超R阈值：10万元
 
 # 受理方匹配关键词（API日志中的格式与后台显示不同，用关键词模糊匹配）

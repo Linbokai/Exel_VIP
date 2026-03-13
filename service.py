@@ -93,17 +93,18 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
                     fetch_trends=True, fetch_sessions=True) -> ReportResult:
     """
     执行完整的日报生成流程：
-      1. 获取当日工单
-      2. 获取待跟进工单
-      3. 获取总会话量 + 会话数据
-      4. 获取趋势对比数据
-      5. 构建日报 + 告警检查
+      1. 获取总会话量（优先调用，避免被后续大量API消耗频率配额）
+      2. 获取当日工单
+      3. 获取待跟进工单
+      4. 获取会话明细数据
+      5. 获取趋势对比数据
+      6. 构建日报 + 告警检查
     """
     if client is None:
         client = QiyuClient()
 
     cache = TicketCache() if use_cache else None
-    total_steps = 5
+    total_steps = 6
     step_counter = [0]
 
     def _progress(desc):
@@ -114,7 +115,20 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
 
     result = ReportResult()
 
-    # 1. 获取当日工单
+    # 1. 获取总会话量（最先调用，避免被后续大量工单API消耗频率配额）
+    # 会话统计使用完整自然日（00:00~23:59），与七鱼坐席工作量报表对齐
+    session_day = report_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    session_start = int(session_day.timestamp() * 1000)
+    session_end = int(session_day.replace(hour=23, minute=59, second=59).timestamp() * 1000)
+    _progress("获取会话统计...")
+    try:
+        result.total_sessions = client.get_total_session_count(session_start, session_end)
+        logger.info(f"总会话量: {result.total_sessions}")
+    except Exception as e:
+        logger.error(f"获取总会话量失败: {e}", exc_info=True)
+        result.errors.append("总会话量")
+
+    # 2. 获取当日工单
     daily_start, daily_end = get_report_time_range(report_date)
     _progress("获取当日工单...")
     try:
@@ -126,7 +140,7 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
         logger.error(f"获取当日工单失败: {e}", exc_info=True)
         result.errors.append("当日工单")
 
-    # 2. 获取待跟进工单
+    # 3. 获取待跟进工单
     pending_start, pending_end = get_pending_time_range()
     _progress("获取待跟进工单...")
     try:
@@ -138,27 +152,16 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
         logger.error(f"获取待跟进工单失败: {e}", exc_info=True)
         result.errors.append("待跟进工单")
 
-    # 3. 获取总会话量 + 会话数据
-    # 会话统计使用完整自然日（00:00~23:59），与七鱼坐席工作量报表对齐
-    session_day = report_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    session_start = int(session_day.timestamp() * 1000)
-    session_end = int(session_day.replace(hour=23, minute=59, second=59).timestamp() * 1000)
-    _progress("获取会话数据...")
-    try:
-        result.total_sessions = client.get_total_session_count(session_start, session_end)
-        logger.info(f"总会话量: {result.total_sessions}")
-    except Exception as e:
-        logger.error(f"获取总会话量失败: {e}", exc_info=True)
-        result.errors.append("总会话量")
-
+    # 4. 获取会话明细数据
     if fetch_sessions:
+        _progress("获取会话明细数据...")
         try:
             result.session_data = client.export_session_data(session_start, session_end)
             logger.info(f"会话数据: {len(result.session_data)} 条")
         except Exception as e:
             logger.warning(f"获取会话数据失败（非关键）: {e}")
 
-    # 4. 获取趋势数据
+    # 5. 获取趋势数据
     _progress("获取趋势对比数据...")
     if fetch_trends:
         result.trend_data = _fetch_trend_data(client, report_date)
