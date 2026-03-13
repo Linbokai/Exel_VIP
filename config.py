@@ -106,6 +106,10 @@ ISSUE_KEYWORDS = {
                        "建议", "希望", "优化", "改进", "体验差", "不合理"],
 }
 
+# 问题选择字段值（CF_ISSUE_SELECT 自定义字段）
+ISSUE_SELECT_CHURN = "预流失"
+ISSUE_SELECT_COMPLAINT = "我要投诉"
+
 # 运营/研发介入判定：工单日志中转交记录包含此关键词
 DEV_TRANSFER_KEYWORD = "飞鱼科技"
 

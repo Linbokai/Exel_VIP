@@ -15,10 +15,11 @@ from dataclasses import dataclass, field
 
 from config import (
     get_report_time_range, get_pending_time_range,
-    SUPER_R_THRESHOLD,
+    SUPER_R_THRESHOLD, CF_RECHARGE, CF_ISSUE_SELECT,
 )
 from qiyu_client import QiyuClient
 from report_builder import ReportBuilder
+from ticket_utils import get_custom_field, parse_amount
 from cache import TicketCache
 from alert import check_and_alert
 
@@ -56,7 +57,6 @@ def _fetch_trend_data(client, report_date):
 
         trend["prev_daily_count"] = len(prev_tickets)
 
-        from report_builder import get_custom_field, parse_amount, CF_RECHARGE, CF_ISSUE_SELECT
         super_r = 0
         pre_churn = 0
         pre_complaint = 0
