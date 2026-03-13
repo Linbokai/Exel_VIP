@@ -21,7 +21,7 @@ from config import (
     APP_KEY, APP_SECRET, BASE_URL, API,
     WORKORDER_TEMPLATE_NAME, WORKORDER_TEMPLATE_ID,
     STATUS_PENDING, API_MAX_WORKERS, API_RATE_LIMIT, API_RATE_BURST,
-    DEV_TRANSFER_KEYWORD,
+    DEV_TRANSFER_KEYWORD, AGENT_GROUP,
 )
 from rate_limiter import TokenBucketRateLimiter
 
@@ -568,8 +568,8 @@ class QiyuClient:
 
     def get_total_session_count(self, start_time, end_time):
         """
-        获取总会话量（与七鱼坐席工作量报表对齐）。
-        优先使用历史总览（不重复计算），其次用工作量报表汇总级别。
+        获取「倍特VIP工单组」的会话总量（与七鱼坐席工作量报表对齐）。
+        使用 model=2（按客服组）查询，筛选出目标组的数据。
         """
 
         # 将endTime限制为当前时间（统计API不接受未来时间）
@@ -577,55 +577,42 @@ class QiyuClient:
         if end_time > now_ms:
             end_time = now_ms
 
-        # 1. 优先使用历史数据总览（全局会话数，不存在重复计算问题）
+        # 1. 工作量报表 model=2（按客服组），筛选目标组
+        try:
+            workload = self.get_staff_workload(start_time, end_time, model=2)
+            logger.info(f"工作量报表(按组)返回: {len(workload) if isinstance(workload, list) else type(workload).__name__}")
+            if isinstance(workload, list):
+                for group in workload:
+                    group_name = group.get("groupName", "") or group.get("name", "")
+                    if AGENT_GROUP in group_name:
+                        count = group.get("totalSessionCount", 0)
+                        logger.info(f"匹配组「{group_name}」: totalSessionCount={count}")
+                        if count and int(count) > 0:
+                            return int(count)
+                # 没匹配到目标组，记录所有组名便于排查
+                all_groups = [g.get("groupName", g.get("name", "?")) for g in workload]
+                logger.warning(f"未匹配到「{AGENT_GROUP}」，可用组: {all_groups}")
+        except Exception as e:
+            logger.warning(f"获取工作量报表(按组)失败: {e}")
+
+        # 2. 兜底：历史数据总览（全局会话数）
         try:
             overview = self.get_overview(start_time, end_time)
-            logger.info(f"历史总览返回: type={type(overview).__name__}, value={str(overview)[:200]}")
             if isinstance(overview, dict):
-                # sessions 是总会话数（与坐席报表页面顶部的"总会话量"一致）
                 count = overview.get("sessions") or overview.get("totalSessionCount")
                 if count is not None and int(count) > 0:
+                    logger.info(f"使用历史总览兜底: sessions={count}")
                     return int(count)
         except Exception as e:
             logger.warning(f"获取总览失败: {e}")
 
-        # 2. 工作量报表 — 用 model=2（按客服组）避免同一会话被多个坐席重复计算
-        try:
-            workload = self.get_staff_workload(start_time, end_time, model=2)
-            logger.info(f"工作量报表(按组)返回: type={type(workload).__name__}, value={str(workload)[:200]}")
-            if isinstance(workload, list):
-                total = sum(s.get("totalSessionCount", 0) for s in workload)
-                if total > 0:
-                    return total
-            elif isinstance(workload, dict):
-                count = workload.get("totalSessionCount", 0)
-                if count and int(count) > 0:
-                    return int(count)
-        except Exception as e:
-            logger.warning(f"获取工作量报表失败: {e}")
-
-        # 3. 兜底：按全部汇总（model=1），但可能因转接重复计算
-        try:
-            workload = self.get_staff_workload(start_time, end_time, model=1)
-            logger.info(f"工作量报表(全部)返回: type={type(workload).__name__}, value={str(workload)[:200]}")
-            if isinstance(workload, list):
-                total = sum(s.get("totalSessionCount", 0) for s in workload)
-                if total > 0:
-                    return total
-            elif isinstance(workload, dict):
-                count = workload.get("totalSessionCount", 0)
-                if count and int(count) > 0:
-                    return int(count)
-        except Exception as e:
-            logger.warning(f"获取工作量报表失败: {e}")
-
-        # 4. 最后尝试实时会话概览（当日实时数据）
+        # 3. 实时会话概览（当日实时数据）
         try:
             msg = self.get_realtime_session_stats()
             if isinstance(msg, dict):
                 count = msg.get("totalSessionCount", 0)
-                logger.info(f"实时会话概览: totalSessionCount={count}")
                 if count and int(count) > 0:
+                    logger.info(f"使用实时会话概览兜底: totalSessionCount={count}")
                     return int(count)
         except Exception as e:
             logger.warning(f"获取实时会话概览失败: {e}")
