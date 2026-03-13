@@ -222,19 +222,63 @@ class QiyuClient:
         except Exception as e:
             logger.warning(f"获取工单详情失败 #{tid}: {e}")
 
-        # 获取日志，推断受理方
+        # 从工单字段直接提取受理人（优先级最高）
+        handler = self._extract_handler_from_ticket(ticket)
+        if handler:
+            logger.debug(f"工单 #{tid} 从详情字段提取受理人: {handler}")
+        else:
+            # 首次获取时记录工单中的受理人相关字段，便于排查
+            handler_fields = {k: v for k, v in ticket.items()
+                              if any(kw in k.lower() for kw in ("staff", "handler", "assignee", "group"))
+                              and v}
+            if handler_fields:
+                logger.info(f"工单 #{tid} 受理人相关字段: {handler_fields}")
+
+        # 获取日志，补充受理方信息
         try:
             log_entries = self.get_ticket_log(tid)
             ticket["_log"] = log_entries
-            ticket["_handler"] = self._parse_handler(log_entries)
+            # 日志解析作为补充：如果工单字段没有受理人，才从日志推断
+            if not handler:
+                handler = self._parse_handler(log_entries)
+            ticket["_handler"] = handler
             ticket["_has_dev_transfer"] = self._has_dev_transfer(log_entries)
         except Exception as e:
             logger.warning(f"获取工单日志失败 #{tid}: {e}")
             ticket["_log"] = []
-            ticket["_handler"] = ""
+            ticket["_handler"] = handler
             ticket["_has_dev_transfer"] = False
 
         return ticket
+
+    @staticmethod
+    def _extract_handler_from_ticket(ticket):
+        """
+        从工单详情/搜索结果的直接字段中提取当前受理人。
+        七鱼工单 API 可能返回以下受理人相关字段：
+          staffName, groupName, handlerName, assigneeName 等
+        """
+        # 按优先级尝试多个可能的字段名
+        for field in ("staffName", "handlerName", "assigneeName",
+                       "staff_name", "handler_name", "assignee_name"):
+            val = ticket.get(field)
+            if val and str(val).strip():
+                return str(val).strip()
+
+        # 尝试从 staffInfo / handler 嵌套对象中提取
+        for obj_field in ("staffInfo", "handler", "assignee", "staff"):
+            obj = ticket.get(obj_field)
+            if isinstance(obj, dict):
+                name = obj.get("name") or obj.get("staffName") or obj.get("nickName")
+                if name and str(name).strip():
+                    return str(name).strip()
+
+        # 尝试 groupName（受理组）
+        group = ticket.get("groupName") or ticket.get("group_name")
+        if group and str(group).strip():
+            return str(group).strip()
+
+        return ""
 
     def enrich_tickets_concurrent(self, tickets, max_workers=None):
         """
@@ -282,20 +326,30 @@ class QiyuClient:
             return ""
 
         import re
+        handler_keywords = ("受理人", "受理组", "转交", "分配", "指派")
+
         for entry in reversed(log_entries):
             info_list = entry.get("info", [])
             for info in info_list:
                 title = info.get("title", "") or info.get("titleLang", "")
                 content = info.get("content", "")
-                # 匹配受理人/受理组/转交等关键词
-                if any(kw in title for kw in ("受理人", "受理组", "受理", "转交", "分配", "指派")):
-                    if not content:
-                        continue
-                    # 提取 "更改为YYY" 中的 YYY（当前受理方）
-                    m = re.search(r"更改为(.+?)$", content)
-                    if m:
-                        return m.group(1).strip()
-                    # 如果没有"更改为"格式，直接返回内容
+                # 匹配受理人/受理组/转交等关键词（避免匹配"受理状态"等无关项）
+                if not any(kw in title for kw in handler_keywords):
+                    continue
+                if not content:
+                    continue
+                # 多种格式兼容：
+                # "由A更改为B" / "由A变更为B" / "由A转交给B" / "由A转为B"
+                m = re.search(r"(?:更改为|变更为|转交给|转给|转为|改为|分配给|指派给)(.+?)$", content)
+                if m:
+                    return m.group(1).strip()
+                # "由X更改为Y" 没匹配到，尝试提取 "→" 或 "->" 后面的部分
+                m = re.search(r"[→\->]+\s*(.+?)$", content)
+                if m:
+                    return m.group(1).strip()
+                # 如果都不匹配，且不是纯状态描述，返回原始内容
+                # 排除"受理状态"类的干扰内容
+                if not any(skip in content for skip in ("已解决", "已关闭", "待处理", "处理中")):
                     return content
         return ""
 

@@ -115,11 +115,11 @@ class TestClassifyTicket:
 
     def test_suggestion(self):
         t = {"_content": "觉得不合理体验差", "_title": "希望改进"}
-        assert classify_ticket(t) == "游戏建议"
+        assert classify_ticket(t) == "玩法咨询/游戏建议"
 
     def test_gameplay(self):
         t = {"_content": "玩家咨询副本攻略", "_title": "玩法咨询"}
-        assert classify_ticket(t) == "玩法咨询"
+        assert classify_ticket(t) == "玩法咨询/游戏建议"
 
     def test_other(self):
         t = {"_content": "普通反馈", "_title": "其他"}
