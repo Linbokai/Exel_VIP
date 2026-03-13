@@ -6,8 +6,7 @@
   checksum = SHA1(appSecret + MD5(requestBody) + time)
 
 增强功能：
-  - 令牌桶速率控制（对齐官方 5QPS/20QPS 限制）
-  - 按七鱼错误码分类处理 + 指数退避重试
+  - 令牌桶速率控制
   - 线程池并发请求
   - 会话数据导出
 """
@@ -28,18 +27,6 @@ from rate_limiter import TokenBucketRateLimiter
 
 logger = logging.getLogger(__name__)
 
-RETRYABLE_BIZ_CODES = {14009, 14500}
-NON_RETRYABLE_BIZ_CODES = {14001, 14002, 14003, 14004, 14008, 14515}
-
-
-class QiyuApiError(Exception):
-    """七鱼 API 业务错误"""
-    def __init__(self, code, message, path=""):
-        self.code = code
-        self.message = message
-        self.path = path
-        super().__init__(f"[{code}] {path}: {message}")
-
 
 class QiyuClient:
     """七鱼 OpenAPI 客户端"""
@@ -48,7 +35,7 @@ class QiyuClient:
         self.app_key = app_key or APP_KEY
         self.app_secret = app_secret or APP_SECRET
         self.session = requests.Session()
-        self._template_id = None
+        self._template_id = None  # VIP工单模板ID（懒加载）
         self._rate_limiter = TokenBucketRateLimiter(
             rate=API_RATE_LIMIT, burst=API_RATE_BURST,
         )
@@ -63,30 +50,29 @@ class QiyuClient:
 
     def _request(self, path, body, retries=2):
         """
-        发送已签名的 POST 请求。
-        - 每次重试都重新生成 checksum（官方有效期仅 5 分钟）
-        - 网络异常和可重试业务码(14009/14500)使用指数退避重试
-        - 不可重试业务码(14001-14008/14515)立即抛出
+        发送已签名的 POST 请求（带速率控制）。
+        七鱼API的 message 字段可能是 JSON 字符串，自动解析。
         """
+        # 速率控制
+        self._rate_limiter.acquire()
+
         body_json = json.dumps(body, ensure_ascii=False)
         body_bytes = body_json.encode("utf-8")
-        headers = {"Content-Type": "application/json;charset=utf-8"}
+        ts = str(int(time.time()))
+        checksum = self._checksum(body_bytes, ts)
+
         url = f"{BASE_URL}{path}"
+        params = {
+            "appKey": self.app_key,
+            "time": ts,
+            "checksum": checksum,
+        }
+        headers = {"Content-Type": "application/json;charset=utf-8"}
 
         last_error = None
         for attempt in range(retries + 1):
-            self._rate_limiter.acquire()
-
-            ts = str(int(time.time()))
-            checksum = self._checksum(body_bytes, ts)
-            params = {
-                "appKey": self.app_key,
-                "time": ts,
-                "checksum": checksum,
-            }
-
             try:
-                logger.debug(f"POST {path} attempt={attempt+1}")
+                logger.debug(f"POST {path} body={body}")
                 resp = self.session.post(
                     url, params=params, data=body_bytes,
                     headers=headers, timeout=30,
@@ -95,32 +81,18 @@ class QiyuClient:
                 data = resp.json()
 
                 code = data.get("code", -1)
-
-                if code == 200:
-                    logger.debug(f"API成功: {path}")
-                elif code in RETRYABLE_BIZ_CODES:
-                    msg_text = str(data.get("message", ""))[:200]
-                    logger.warning(f"API可重试错误: {path} → code={code}, msg={msg_text}")
-                    if attempt < retries:
-                        delay = min(2 ** attempt, 8)
-                        logger.info(f"指数退避等待 {delay}s 后重试...")
-                        time.sleep(delay)
-                        continue
-                    raise QiyuApiError(code, msg_text, path)
-                elif code in NON_RETRYABLE_BIZ_CODES:
-                    msg_text = str(data.get("message", ""))[:200]
-                    logger.error(f"API不可重试错误: {path} → code={code}, msg={msg_text}")
-                    raise QiyuApiError(code, msg_text, path)
+                if code != 200:
+                    logger.warning(f"API业务错误: {path} → code={code}, msg={data.get('message', '')[:200]}")
                 else:
-                    if code != 200:
-                        logger.warning(f"API业务警告: {path} → code={code}")
+                    logger.debug(f"API成功: {path}")
 
+                # 七鱼API的message字段经常是JSON字符串，自动解析
                 msg = data.get("message")
                 if isinstance(msg, str):
                     try:
                         data["message"] = json.loads(msg)
                     except (json.JSONDecodeError, TypeError):
-                        pass
+                        pass  # 保留原始字符串
 
                 return data
 
@@ -128,10 +100,9 @@ class QiyuClient:
                 last_error = e
                 logger.warning(f"请求失败 [{attempt+1}/{retries+1}]: {path} → {e}")
                 if attempt < retries:
-                    delay = min(2 ** attempt, 8)
-                    time.sleep(delay)
+                    time.sleep(1)
 
-        raise ConnectionError(f"API请求失败(已重试{retries}次): {path} → {last_error}")
+        raise ConnectionError(f"API请求失败: {path} → {last_error}")
 
     # ==================== 工单模板 ====================
 
@@ -386,15 +357,20 @@ class QiyuClient:
     def _has_dev_transfer(log_entries):
         """
         检查工单日志中是否存在转交给企业微信-飞鱼科技的记录。
-        将每条日志序列化为文本，同时包含"转交"和"飞鱼科技"即判定为运营/研发介入。
+        遍历所有日志条目，匹配含"转交"的操作中是否涉及飞鱼科技。
         """
         if not log_entries:
             return False
         for entry in log_entries:
-            entry_text = json.dumps(entry, ensure_ascii=False)
-            if "转交" in entry_text and DEV_TRANSFER_KEYWORD in entry_text:
-                logger.debug(f"匹配到研发介入转交记录: {entry_text[:200]}")
-                return True
+            info_list = entry.get("info", [])
+            for info in info_list:
+                title = info.get("title", "") or info.get("titleLang", "")
+                if "转交" not in title:
+                    continue
+                # 检查整个 entry 是否包含飞鱼科技（覆盖 content、operator 等各种字段）
+                entry_text = json.dumps(entry, ensure_ascii=False)
+                if DEV_TRANSFER_KEYWORD in entry_text:
+                    return True
         return False
 
     # ==================== 便捷方法：批量获取 ====================
@@ -487,12 +463,11 @@ class QiyuClient:
             logger.error(f"会话导出提交异常: {e}")
             return []
 
-        # 2. 轮询状态（指数退避：2s→4s→8s→16s，上限 16s）
+        # 2. 轮询状态
         deadline = time.time() + max_wait
         download_url = None
-        poll_interval = 2
         while time.time() < deadline:
-            time.sleep(poll_interval)
+            time.sleep(5)
             try:
                 check_resp = self._request(API["export_session_check"], {
                     "taskId": task_id,
@@ -506,10 +481,9 @@ class QiyuClient:
                     elif status in ("failed", "error", "-1"):
                         logger.error(f"会话导出任务失败: {check_msg}")
                         return []
-                logger.debug(f"会话导出进行中 (下次轮询 {poll_interval}s): {check_msg}")
+                logger.debug(f"会话导出进行中: {check_msg}")
             except Exception as e:
                 logger.warning(f"检查导出状态失败: {e}")
-            poll_interval = min(poll_interval * 2, 16)
 
         if not download_url:
             logger.warning("会话导出超时或未获取到下载链接")
@@ -576,27 +550,10 @@ class QiyuClient:
             "endTime": self._to_seconds(end_time),
             "model": model,
         })
-        logger.debug(f"staffworklod raw keys={list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
-
-        # 七鱼API响应格式不固定，尝试多种取法
-        # 优先从 message 取（最常见），再尝试 data、result
-        msg = data.get("message", None)
-        if isinstance(msg, str):
-            # _request 已尝试过 JSON 解析，如果还是 str 说明不是数据
-            msg = None
-        if msg is None:
-            msg = data.get("data", None)
-        if msg is None:
-            msg = data.get("result", None)
-
-        # msg 可能是 dict（包含 result 列表）或直接是 list
+        msg = data.get("message", data)
         if isinstance(msg, dict):
-            return msg.get("result", msg.get("data", []))
-        if isinstance(msg, list):
-            return msg
-
-        logger.warning(f"staffworklod 无法解析: raw={json.dumps(data, ensure_ascii=False)[:500]}")
-        return []
+            return msg.get("result", [])
+        return msg
 
     def get_overview(self, start_time, end_time):
         """
@@ -607,60 +564,64 @@ class QiyuClient:
             "startTime": self._to_seconds(start_time),
             "endTime": self._to_seconds(end_time),
         })
-        msg = data.get("message", None)
-        if isinstance(msg, str):
-            msg = None
-        if msg is None:
-            msg = data.get("data", None)
-        if msg is None:
-            msg = data.get("result", None)
-        if msg is None:
-            msg = data
-        logger.debug(f"overview parsed: {str(msg)[:300]}")
-        return msg
+        return data.get("message", data)
 
     def get_total_session_count(self, start_time, end_time):
         """
-        获取会话总量 = 所有客服个人的 totalSessionCount 相加（排除"总计"行）。
-        使用 model=3（按客服个人）。
-        """
+        获取「倍特VIP工单组」的会话总量（与七鱼坐席工作量报表对齐）。
 
-        # 将endTime限制为当前时间（统计API不接受未来时间）
+        策略（按优先级）：
+          1. model=2（按客服组）→ 筛选目标组的 sessionCount
+          2. model=3（按坐席）→ 筛选属于目标组的坐席，求和 sessionCount
+             这与七鱼后台「坐席工作量」报表的总计行一致。
+          3. 不再兜底到全局实时会话概览，因为那是全公司数据，会偏大。
+        """
         now_ms = int(time.time() * 1000)
         if end_time > now_ms:
             end_time = now_ms
 
-        try:
-            staff_list = self.get_staff_workload(start_time, end_time, model=3)
-            if isinstance(staff_list, list) and staff_list:
-                total = 0
-                for staff in staff_list:
-                    name = staff.get("staffName", "") or staff.get("name", "") or ""
-                    # 跳过"总计"行
-                    if name.strip() in ("总计", "合计", "total", ""):
-                        continue
-                    count = int(staff.get("totalSessionCount", 0) or 0)
-                    total += count
-                    logger.debug(f"  客服「{name}」: totalSessionCount={count}")
-                logger.info(f"会话总量（按客服累加）: {total}（共 {len(staff_list)} 条记录）")
-                return total
-            else:
-                logger.warning(f"staffworklod(model=3) 返回非预期: type={type(staff_list).__name__}, "
-                               f"value={str(staff_list)[:300]}")
-        except Exception as e:
-            logger.warning(f"staffworklod(model=3) 调用失败: {e}")
+        # 前面的工单搜索/enrichment 会消耗大量 API 配额，
+        # 统计接口前主动等待，避免被 14009 频率限制拦截
+        time.sleep(3)
 
-        # 兜底：用 model=2 按客服组，取匹配组的 totalSessionCount
+        # ---------- 方案1: model=2（按客服组） ----------
         try:
             workload = self.get_staff_workload(start_time, end_time, model=2)
+            logger.info(f"工作量报表(按组)返回: {len(workload) if isinstance(workload, list) else type(workload).__name__}")
             if isinstance(workload, list) and workload:
                 for group in workload:
                     group_name = group.get("groupName", "") or group.get("name", "")
                     if AGENT_GROUP in group_name:
-                        count = int(group.get("totalSessionCount", 0) or 0)
-                        logger.info(f"兜底：匹配组「{group_name}」totalSessionCount={count}")
-                        return count
+                        count = int(group.get("sessionCount", 0) or 0)
+                        logger.info(f"匹配组「{group_name}」: sessionCount={count}")
+                        if count > 0:
+                            return count
+                all_groups = [g.get("groupName", g.get("name", "?")) for g in workload]
+                logger.warning(f"未匹配到「{AGENT_GROUP}」，可用组: {all_groups}")
         except Exception as e:
-            logger.warning(f"staffworklod(model=2) 兜底失败: {e}")
+            logger.warning(f"获取工作量报表(按组)失败: {e}")
 
+        # ---------- 方案2: model=3（按坐席）→ 筛选组 → 求和 ----------
+        time.sleep(3)
+        try:
+            agents = self.get_staff_workload(start_time, end_time, model=3)
+            logger.info(f"工作量报表(按坐席)返回: {len(agents) if isinstance(agents, list) else type(agents).__name__}")
+            if isinstance(agents, list) and agents:
+                total = 0
+                matched = []
+                for a in agents:
+                    gn = a.get("groupName", "") or a.get("group", "")
+                    if AGENT_GROUP in str(gn):
+                        sc = int(a.get("sessionCount", 0) or 0)
+                        total += sc
+                        matched.append(f"{a.get('staffName', '?')}={sc}")
+                if matched:
+                    logger.info(f"按坐席汇总「{AGENT_GROUP}」: {', '.join(matched)}, 合计={total}")
+                    return total
+                all_groups = sorted({a.get("groupName", a.get("group", "?")) for a in agents})
+                logger.warning(f"model=3 未匹配组「{AGENT_GROUP}」，可用组: {all_groups}")
+        except Exception as e:
+            logger.warning(f"获取工作量报表(按坐席)失败: {e}")
+
+        logger.error("所有统计方案均未获取到VIP组会话量，返回0")
         return 0
