@@ -7,8 +7,11 @@ import os
 from datetime import datetime, timedelta
 
 # ======================== 七鱼 OpenAPI 认证 ========================
+# 生产环境务必通过环境变量注入，不要依赖默认值
 APP_KEY = os.getenv("QIYU_APP_KEY", "c162d65bae3fc1bdfe20d0c65ab5cb60")
 APP_SECRET = os.getenv("QIYU_APP_SECRET", "A691F4F7EA4B47C6A42AB9987C3E2D6B")
+if not APP_KEY or not APP_SECRET:
+    raise RuntimeError("缺少七鱼认证配置：请设置环境变量 QIYU_APP_KEY 和 QIYU_APP_SECRET")
 BASE_URL = "https://qiyukf.com"
 
 # 七鱼控制台账号（备用：Playwright 抓取会话监控时使用）
@@ -18,25 +21,26 @@ QIYU_USERNAME = os.getenv("QIYU_USERNAME", "openclaw")
 QIYU_PASSWORD = os.getenv("QIYU_PASSWORD", "beite999")
 
 # ======================== API 端点 ========================
+# 标注：[使用中] = 项目代码已调用  [备用] = 已定义但未调用
 API = {
     # 工单
-    "ticket_search":         "/openapi/v2/ticket/search",
-    "ticket_detail":         "/openapi/v2/ticket/new/detail",
-    "ticket_log":            "/openapi/v2/ticket/log",
-    "ticket_filter_list":    "/openapi/v2/ticket/filter/list",
-    "ticket_filter_count":   "/openapi/v2/ticket/filter/count",
-    "ticket_list":           "/openapi/v2/ticket/list",
-    "ticket_template_list":  "/openapi/v2/ticket/template/list",
-    "ticket_template_fields":"/openapi/v2/ticket/template/fields",
-    "category_list":         "/openapi/category/list",
+    "ticket_search":         "/openapi/v2/ticket/search",          # [使用中]
+    "ticket_detail":         "/openapi/v2/ticket/new/detail",      # [使用中]
+    "ticket_log":            "/openapi/v2/ticket/log",             # [使用中]
+    "ticket_template_list":  "/openapi/v2/ticket/template/list",   # [使用中]
+    "ticket_filter_list":    "/openapi/v2/ticket/filter/list",     # [备用]
+    "ticket_filter_count":   "/openapi/v2/ticket/filter/count",    # [备用]
+    "ticket_list":           "/openapi/v2/ticket/list",            # [备用]
+    "ticket_template_fields":"/openapi/v2/ticket/template/fields", # [备用]
+    "category_list":         "/openapi/category/list",             # [备用]
     # 报表统计
-    "stat_overview":         "/openapi/statistic/overview",
-    "stat_staff_workload":   "/openapi/statistic/staffworklod",
-    "stat_staff_quality":    "/openapi/statistic/staffquality",
-    "stat_realtime_session": "/openapi/data/overview/session",
+    "stat_overview":         "/openapi/statistic/overview",        # [使用中]
+    "stat_staff_workload":   "/openapi/statistic/staffworklod",    # [使用中]
+    "stat_realtime_session": "/openapi/data/overview/session",     # [使用中]
+    "stat_staff_quality":    "/openapi/statistic/staffquality",    # [备用]
     # 会话导出（异步）
-    "export_session":        "/openapi/export/session",
-    "export_session_check":  "/openapi/export/session/check",
+    "export_session":        "/openapi/export/session",            # [使用中]
+    "export_session_check":  "/openapi/export/session/check",      # [使用中]
 }
 
 # ======================== 时间参数 ========================
@@ -106,9 +110,10 @@ ISSUE_KEYWORDS = {
 DEV_TRANSFER_KEYWORD = "飞鱼科技"
 
 # ======================== 并发与速率控制 ========================
-API_MAX_WORKERS = 8           # 并发请求线程数
-API_RATE_LIMIT = 10           # 每秒最大请求数
-API_RATE_BURST = 15           # 突发最大请求数
+# 七鱼官方限制：单接口 5 QPS，租户总计 20 QPS
+API_MAX_WORKERS = 4           # 并发请求线程数（配合限流，避免瞬间超 20 QPS）
+API_RATE_LIMIT = 4            # 每秒最大请求数（低于单接口 5 QPS 上限，留安全余量）
+API_RATE_BURST = 8            # 突发最大请求数（低于租户 20 QPS 上限）
 
 # ======================== 缓存 ========================
 CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache")

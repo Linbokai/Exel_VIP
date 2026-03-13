@@ -114,6 +114,21 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
 
     result = ReportResult()
 
+    # 尝试读取日报缓存（非强制刷新时）
+    date_key = report_date.strftime("%Y%m%d")
+    if cache and use_cache:
+        cached_report = cache.get_report(f"report_{date_key}")
+        if cached_report:
+            logger.info(f"命中日报缓存: report_{date_key}")
+            result.report_text = cached_report.get("text", "")
+            result.structured = cached_report
+            _progress("从缓存加载日报（跳过 API 调用）")
+            _progress("缓存命中")
+            _progress("缓存命中")
+            _progress("缓存命中")
+            _progress("构建完成")
+            return result
+
     # 1. 获取当日工单
     daily_start, daily_end = get_report_time_range(report_date)
     _progress("获取当日工单...")
@@ -139,7 +154,6 @@ def generate_report(report_date: datetime, client: QiyuClient = None,
         result.errors.append("待跟进工单")
 
     # 3. 获取总会话量 + 会话数据
-    # 会话统计使用完整自然日（00:00~23:59），与七鱼坐席工作量报表对齐
     session_day = report_date.replace(hour=0, minute=0, second=0, microsecond=0)
     session_start = int(session_day.timestamp() * 1000)
     session_end = int(session_day.replace(hour=23, minute=59, second=59).timestamp() * 1000)

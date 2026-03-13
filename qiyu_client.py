@@ -6,7 +6,8 @@
   checksum = SHA1(appSecret + MD5(requestBody) + time)
 
 增强功能：
-  - 令牌桶速率控制
+  - 令牌桶速率控制（对齐官方 5QPS/20QPS 限制）
+  - 按七鱼错误码分类处理 + 指数退避重试
   - 线程池并发请求
   - 会话数据导出
 """
@@ -27,6 +28,18 @@ from rate_limiter import TokenBucketRateLimiter
 
 logger = logging.getLogger(__name__)
 
+RETRYABLE_BIZ_CODES = {14009, 14500}
+NON_RETRYABLE_BIZ_CODES = {14001, 14002, 14003, 14004, 14008, 14515}
+
+
+class QiyuApiError(Exception):
+    """七鱼 API 业务错误"""
+    def __init__(self, code, message, path=""):
+        self.code = code
+        self.message = message
+        self.path = path
+        super().__init__(f"[{code}] {path}: {message}")
+
 
 class QiyuClient:
     """七鱼 OpenAPI 客户端"""
@@ -35,7 +48,7 @@ class QiyuClient:
         self.app_key = app_key or APP_KEY
         self.app_secret = app_secret or APP_SECRET
         self.session = requests.Session()
-        self._template_id = None  # VIP工单模板ID（懒加载）
+        self._template_id = None
         self._rate_limiter = TokenBucketRateLimiter(
             rate=API_RATE_LIMIT, burst=API_RATE_BURST,
         )
@@ -50,29 +63,30 @@ class QiyuClient:
 
     def _request(self, path, body, retries=2):
         """
-        发送已签名的 POST 请求（带速率控制）。
-        七鱼API的 message 字段可能是 JSON 字符串，自动解析。
+        发送已签名的 POST 请求。
+        - 每次重试都重新生成 checksum（官方有效期仅 5 分钟）
+        - 网络异常和可重试业务码(14009/14500)使用指数退避重试
+        - 不可重试业务码(14001-14008/14515)立即抛出
         """
-        # 速率控制
-        self._rate_limiter.acquire()
-
         body_json = json.dumps(body, ensure_ascii=False)
         body_bytes = body_json.encode("utf-8")
-        ts = str(int(time.time()))
-        checksum = self._checksum(body_bytes, ts)
-
-        url = f"{BASE_URL}{path}"
-        params = {
-            "appKey": self.app_key,
-            "time": ts,
-            "checksum": checksum,
-        }
         headers = {"Content-Type": "application/json;charset=utf-8"}
+        url = f"{BASE_URL}{path}"
 
         last_error = None
         for attempt in range(retries + 1):
+            self._rate_limiter.acquire()
+
+            ts = str(int(time.time()))
+            checksum = self._checksum(body_bytes, ts)
+            params = {
+                "appKey": self.app_key,
+                "time": ts,
+                "checksum": checksum,
+            }
+
             try:
-                logger.debug(f"POST {path} body={body}")
+                logger.debug(f"POST {path} attempt={attempt+1}")
                 resp = self.session.post(
                     url, params=params, data=body_bytes,
                     headers=headers, timeout=30,
@@ -81,18 +95,32 @@ class QiyuClient:
                 data = resp.json()
 
                 code = data.get("code", -1)
-                if code != 200:
-                    logger.warning(f"API业务错误: {path} → code={code}, msg={data.get('message', '')[:200]}")
-                else:
-                    logger.debug(f"API成功: {path}")
 
-                # 七鱼API的message字段经常是JSON字符串，自动解析
+                if code == 200:
+                    logger.debug(f"API成功: {path}")
+                elif code in RETRYABLE_BIZ_CODES:
+                    msg_text = str(data.get("message", ""))[:200]
+                    logger.warning(f"API可重试错误: {path} → code={code}, msg={msg_text}")
+                    if attempt < retries:
+                        delay = min(2 ** attempt, 8)
+                        logger.info(f"指数退避等待 {delay}s 后重试...")
+                        time.sleep(delay)
+                        continue
+                    raise QiyuApiError(code, msg_text, path)
+                elif code in NON_RETRYABLE_BIZ_CODES:
+                    msg_text = str(data.get("message", ""))[:200]
+                    logger.error(f"API不可重试错误: {path} → code={code}, msg={msg_text}")
+                    raise QiyuApiError(code, msg_text, path)
+                else:
+                    if code != 200:
+                        logger.warning(f"API业务警告: {path} → code={code}")
+
                 msg = data.get("message")
                 if isinstance(msg, str):
                     try:
                         data["message"] = json.loads(msg)
                     except (json.JSONDecodeError, TypeError):
-                        pass  # 保留原始字符串
+                        pass
 
                 return data
 
@@ -100,9 +128,10 @@ class QiyuClient:
                 last_error = e
                 logger.warning(f"请求失败 [{attempt+1}/{retries+1}]: {path} → {e}")
                 if attempt < retries:
-                    time.sleep(1)
+                    delay = min(2 ** attempt, 8)
+                    time.sleep(delay)
 
-        raise ConnectionError(f"API请求失败: {path} → {last_error}")
+        raise ConnectionError(f"API请求失败(已重试{retries}次): {path} → {last_error}")
 
     # ==================== 工单模板 ====================
 
@@ -458,11 +487,12 @@ class QiyuClient:
             logger.error(f"会话导出提交异常: {e}")
             return []
 
-        # 2. 轮询状态
+        # 2. 轮询状态（指数退避：2s→4s→8s→16s，上限 16s）
         deadline = time.time() + max_wait
         download_url = None
+        poll_interval = 2
         while time.time() < deadline:
-            time.sleep(5)
+            time.sleep(poll_interval)
             try:
                 check_resp = self._request(API["export_session_check"], {
                     "taskId": task_id,
@@ -476,9 +506,10 @@ class QiyuClient:
                     elif status in ("failed", "error", "-1"):
                         logger.error(f"会话导出任务失败: {check_msg}")
                         return []
-                logger.debug(f"会话导出进行中: {check_msg}")
+                logger.debug(f"会话导出进行中 (下次轮询 {poll_interval}s): {check_msg}")
             except Exception as e:
                 logger.warning(f"检查导出状态失败: {e}")
+            poll_interval = min(poll_interval * 2, 16)
 
         if not download_url:
             logger.warning("会话导出超时或未获取到下载链接")
