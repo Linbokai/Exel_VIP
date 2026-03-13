@@ -568,11 +568,15 @@ class QiyuClient:
                 for key in ("result", "resultList", "data"):
                     items = msg.get(key)
                     if isinstance(items, list):
+                        if not items:
+                            logger.info(f"工作量报表(model={model}) 返回空列表, key={key}, 完整响应: {json.dumps(data, ensure_ascii=False)[:800]}")
                         return items
                 # 没有找到列表字段，记录原始响应用于诊断
-                logger.warning(f"工作量报表(model={model}) dict响应无可解析列表, keys={list(msg.keys())}, raw={str(msg)[:500]}")
+                logger.warning(f"工作量报表(model={model}) dict响应无可解析列表, keys={list(msg.keys())}, 完整响应: {json.dumps(data, ensure_ascii=False)[:800]}")
                 return []
             if isinstance(msg, list):
+                if not msg:
+                    logger.warning(f"工作量报表(model={model}) message直接返回空列表, code={code}, 完整响应: {json.dumps(data, ensure_ascii=False)[:800]}")
                 return msg
             logger.warning(f"工作量报表返回非预期类型: code={code}, msg_type={type(msg).__name__}, msg={str(msg)[:200]}")
             return []
