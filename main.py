@@ -94,25 +94,28 @@ def main():
     print("\n" + result.report_text)
 
     # 保存文件
-    txt_path = result.builder.save_text()
-    print(f"\n>>> 文本日报已保存: {txt_path}")
+    if result.builder is not None:
+        txt_path = result.builder.save_text()
+        print(f"\n>>> 文本日报已保存: {txt_path}")
 
-    if not args.text_only:
-        try:
-            xlsx_path = result.builder.save_excel()
-            print(f">>> Excel日报已保存: {xlsx_path}")
-        except ImportError:
-            print(">>> 提示：安装 openpyxl 后可生成Excel (pip install openpyxl)")
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Excel生成失败: {e}", exc_info=True)
+        if not args.text_only:
+            try:
+                xlsx_path = result.builder.save_excel()
+                print(f">>> Excel日报已保存: {xlsx_path}")
+            except ImportError:
+                print(">>> 提示：安装 openpyxl 后可生成Excel (pip install openpyxl)")
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"Excel生成失败: {e}", exc_info=True)
 
-        try:
-            pdf_path = result.builder.save_pdf()
-            print(f">>> PDF日报已保存: {pdf_path}")
-        except ImportError:
-            print(">>> 提示：安装 reportlab 后可生成PDF (pip install reportlab)")
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"PDF生成失败: {e}", exc_info=True)
+            try:
+                pdf_path = result.builder.save_pdf()
+                print(f">>> PDF日报已保存: {pdf_path}")
+            except ImportError:
+                print(">>> 提示：安装 reportlab 后可生成PDF (pip install reportlab)")
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"PDF生成失败: {e}", exc_info=True)
+    else:
+        print("\n[!] 日报构建器初始化失败，无法保存文件")
 
     print("\n>>> 日报生成完成！")
 

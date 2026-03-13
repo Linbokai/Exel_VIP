@@ -40,20 +40,23 @@ def scheduled_generate():
         result = generate_report(report_date)
 
         # 保存文件
-        txt_path = result.builder.save_text()
-        logger.info(f"文本日报: {txt_path}")
+        if result.builder is not None:
+            txt_path = result.builder.save_text()
+            logger.info(f"文本日报: {txt_path}")
 
-        try:
-            xlsx_path = result.builder.save_excel()
-            logger.info(f"Excel日报: {xlsx_path}")
-        except Exception as e:
-            logger.warning(f"Excel生成失败: {e}")
+            try:
+                xlsx_path = result.builder.save_excel()
+                logger.info(f"Excel日报: {xlsx_path}")
+            except Exception as e:
+                logger.warning(f"Excel生成失败: {e}")
 
-        try:
-            pdf_path = result.builder.save_pdf()
-            logger.info(f"PDF日报: {pdf_path}")
-        except Exception as e:
-            logger.warning(f"PDF生成失败: {e}")
+            try:
+                pdf_path = result.builder.save_pdf()
+                logger.info(f"PDF日报: {pdf_path}")
+            except Exception as e:
+                logger.warning(f"PDF生成失败: {e}")
+        else:
+            logger.error("日报构建器为空，跳过文件保存")
 
         # 推送通知
         send_daily_report_notification(result.report_text, date_str)

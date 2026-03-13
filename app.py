@@ -90,27 +90,36 @@ def generate():
     try:
         result = generate_report(report_date)
 
-        txt_path = result.builder.save_text()
-
+        txt_filename = None
         xlsx_filename = None
-        try:
-            xlsx_path = result.builder.save_excel()
-            xlsx_filename = Path(xlsx_path).name
-        except Exception:
-            logger.error(f"Excel生成失败:\n{traceback.format_exc()}")
-
         pdf_filename = None
-        try:
-            pdf_path = result.builder.save_pdf()
-            pdf_filename = Path(pdf_path).name
-        except Exception:
-            logger.error(f"PDF生成失败:\n{traceback.format_exc()}")
+
+        if result.builder is not None:
+            try:
+                txt_path = result.builder.save_text()
+                txt_filename = Path(txt_path).name
+            except Exception:
+                logger.error(f"文本保存失败:\n{traceback.format_exc()}")
+
+            try:
+                xlsx_path = result.builder.save_excel()
+                xlsx_filename = Path(xlsx_path).name
+            except Exception:
+                logger.error(f"Excel生成失败:\n{traceback.format_exc()}")
+
+            try:
+                pdf_path = result.builder.save_pdf()
+                pdf_filename = Path(pdf_path).name
+            except Exception:
+                logger.error(f"PDF生成失败:\n{traceback.format_exc()}")
+        else:
+            logger.error("日报构建器为空，跳过文件保存")
 
         return jsonify({
             "success": True,
             "report": result.report_text,
             "structured": result.structured,
-            "txt_filename": Path(txt_path).name,
+            "txt_filename": txt_filename,
             "xlsx_filename": xlsx_filename,
             "pdf_filename": pdf_filename,
             "stats": result.structured.get("stats", {}),
@@ -145,21 +154,30 @@ def generate_stream():
         try:
             result = generate_report(report_date, on_progress=on_progress)
 
-            txt_path = result.builder.save_text()
-
+            txt_filename = None
             xlsx_filename = None
-            try:
-                xlsx_path = result.builder.save_excel()
-                xlsx_filename = Path(xlsx_path).name
-            except Exception:
-                logger.error(f"Excel生成失败:\n{traceback.format_exc()}")
-
             pdf_filename = None
-            try:
-                pdf_path = result.builder.save_pdf()
-                pdf_filename = Path(pdf_path).name
-            except Exception:
-                logger.error(f"PDF生成失败:\n{traceback.format_exc()}")
+
+            if result.builder is not None:
+                try:
+                    txt_path = result.builder.save_text()
+                    txt_filename = Path(txt_path).name
+                except Exception:
+                    logger.error(f"文本保存失败:\n{traceback.format_exc()}")
+
+                try:
+                    xlsx_path = result.builder.save_excel()
+                    xlsx_filename = Path(xlsx_path).name
+                except Exception:
+                    logger.error(f"Excel生成失败:\n{traceback.format_exc()}")
+
+                try:
+                    pdf_path = result.builder.save_pdf()
+                    pdf_filename = Path(pdf_path).name
+                except Exception:
+                    logger.error(f"PDF生成失败:\n{traceback.format_exc()}")
+            else:
+                logger.error("日报构建器为空，跳过文件保存")
 
             progress_queue.put({
                 "type": "done",
@@ -167,7 +185,7 @@ def generate_stream():
                     "success": True,
                     "report": result.report_text,
                     "structured": result.structured,
-                    "txt_filename": Path(txt_path).name,
+                    "txt_filename": txt_filename,
                     "xlsx_filename": xlsx_filename,
                     "pdf_filename": pdf_filename,
                     "stats": result.structured.get("stats", {}),
