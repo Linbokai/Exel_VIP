@@ -357,20 +357,15 @@ class QiyuClient:
     def _has_dev_transfer(log_entries):
         """
         检查工单日志中是否存在转交给企业微信-飞鱼科技的记录。
-        遍历所有日志条目，匹配含"转交"的操作中是否涉及飞鱼科技。
+        将每条日志序列化为文本，同时包含"转交"和"飞鱼科技"即判定为运营/研发介入。
         """
         if not log_entries:
             return False
         for entry in log_entries:
-            info_list = entry.get("info", [])
-            for info in info_list:
-                title = info.get("title", "") or info.get("titleLang", "")
-                if "转交" not in title:
-                    continue
-                # 检查整个 entry 是否包含飞鱼科技（覆盖 content、operator 等各种字段）
-                entry_text = json.dumps(entry, ensure_ascii=False)
-                if DEV_TRANSFER_KEYWORD in entry_text:
-                    return True
+            entry_text = json.dumps(entry, ensure_ascii=False)
+            if "转交" in entry_text and DEV_TRANSFER_KEYWORD in entry_text:
+                logger.debug(f"匹配到研发介入转交记录: {entry_text[:200]}")
+                return True
         return False
 
     # ==================== 便捷方法：批量获取 ====================
