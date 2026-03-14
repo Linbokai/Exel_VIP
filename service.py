@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from config import (
     get_report_time_range, get_pending_time_range,
     SUPER_R_THRESHOLD, CF_RECHARGE, CF_ISSUE_SELECT,
+    ISSUE_SELECT_CHURN, ISSUE_SELECT_COMPLAINT,
 )
 from qiyu_client import QiyuClient
 from report_builder import ReportBuilder
@@ -66,9 +67,9 @@ def _fetch_trend_data(client, report_date):
             issue_select = get_custom_field(custom, CF_ISSUE_SELECT)
             if recharge >= SUPER_R_THRESHOLD:
                 super_r += 1
-            if issue_select == "预流失":
+            if issue_select == ISSUE_SELECT_CHURN:
                 pre_churn += 1
-            if issue_select == "我要投诉":
+            if issue_select == ISSUE_SELECT_COMPLAINT:
                 pre_complaint += 1
 
         trend["prev_super_r_count"] = super_r
